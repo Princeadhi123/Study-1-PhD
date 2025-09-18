@@ -12,6 +12,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.inspection import permutation_importance
 
 warnings.filterwarnings("ignore", category=UserWarning)
 sns.set(context="notebook", style="whitegrid")
@@ -288,6 +289,57 @@ def dimensionality_reduction_and_feature_importance(df: pd.DataFrame,
             k90 = int(np.searchsorted(cumsum.values, 0.90) + 1) if len(cumsum) else 0
             with open(outdir / 'dr_feature_importance_summary.txt', 'w', encoding='utf-8') as f:
                 f.write(f"Top features to reach 90% cumulative RF importance: {k90}\n")
+
+            # Permutation importance to validate model-based importances
+            scoring_used = 'roc_auc'
+            try:
+                perm = permutation_importance(
+                    rf, X_valid, y_valid, n_repeats=10, random_state=42, n_jobs=-1, scoring=scoring_used
+                )
+            except Exception as e:
+                # Fallback to accuracy if ROC AUC is not applicable (e.g., single-class edge cases)
+                scoring_used = 'accuracy'
+                perm = permutation_importance(
+                    rf, X_valid, y_valid, n_repeats=10, random_state=42, n_jobs=-1, scoring=scoring_used
+                )
+            perm_df = pd.DataFrame({
+                'feature': feature_names,
+                'perm_importance_mean': perm.importances_mean,
+                'perm_importance_std': perm.importances_std,
+            }).sort_values('perm_importance_mean', ascending=False)
+            perm_df.to_csv(outdir / 'dr_rf_permutation_importance.csv', index=False)
+
+            # Permutation importance bar plot (top-N)
+            top_n_perm = 20 if len(perm_df) >= 20 else len(perm_df)
+            top_perm = perm_df.head(top_n_perm).iloc[::-1]
+            plt.figure(figsize=(8, max(5, top_n_perm * 0.35)))
+            plt.barh(top_perm['feature'], top_perm['perm_importance_mean'], xerr=top_perm['perm_importance_std'], color='#70AD47', alpha=0.9)
+            plt.title(f'Permutation Importance ({scoring_used.upper()}) Top {top_n_perm}')
+            plt.xlabel(f'Mean decrease in {scoring_used.upper()} (±1 SD)')
+            plt.tight_layout()
+            plt.savefig(outdir / 'dr_rf_permutation_importance_topN.png', dpi=150)
+            plt.close()
+
+            # Permutation cumulative curve
+            plt.figure(figsize=(8,5))
+            perm_cum = (perm_df['perm_importance_mean'].clip(lower=0)).cumsum()
+            total = perm_cum.iloc[-1] if len(perm_cum) else 0
+            if total > 0:
+                perm_cum = perm_cum / total
+            plt.plot(range(1, len(perm_cum)+1), perm_cum, marker='o')
+            plt.axhline(0.90, color='gray', linestyle='--')
+            k90_perm = int(np.searchsorted(perm_cum.values, 0.90) + 1) if len(perm_cum) else 0
+            if k90_perm:
+                plt.axvline(k90_perm, color='red', linestyle=':')
+                plt.text(k90_perm, 0.92, f'90% @ {k90_perm}', color='red')
+            plt.ylim(0, 1.02)
+            plt.title(f'Cumulative Permutation Importance ({scoring_used.upper()})')
+            plt.xlabel('Number of top features')
+            plt.ylabel('Cumulative normalized PI')
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(outdir / 'dr_rf_permutation_importance_cumulative.png', dpi=150)
+            plt.close()
 
             print(f"[DR] PCA n80={n80}, n90={n90}, n95={n95} | RF top-k for 90% importance: {k90}")
         else:
