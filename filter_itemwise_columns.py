@@ -40,6 +40,26 @@ def main():
     # Keep only the requested columns, in the requested order
     trimmed = df.loc[:, present_cols]
 
+    # Impute missing response_time_sec where possible
+    if "response_time_sec" in trimmed.columns:
+        # Ensure numeric dtype for safe operations
+        trimmed["response_time_sec"] = pd.to_numeric(trimmed["response_time_sec"], errors="coerce")
+        before_na = int(trimmed["response_time_sec"].isna().sum())
+
+        if before_na > 0:
+            # Prefer imputation by group median if 'group' is available
+            if "group" in trimmed.columns:
+                group_median = trimmed.groupby("group")["response_time_sec"].transform(lambda s: s.median(skipna=True))
+                trimmed["response_time_sec"] = trimmed["response_time_sec"].fillna(group_median)
+
+            # Fallback to overall median
+            overall_median = trimmed["response_time_sec"].median(skipna=True)
+            trimmed["response_time_sec"] = trimmed["response_time_sec"].fillna(overall_median)
+
+            after_na = int(trimmed["response_time_sec"].isna().sum())
+            filled = before_na - after_na
+            print(f"Imputed response_time_sec: filled {filled} missing values (remaining {after_na}).")
+
     trimmed.to_csv(output_csv, index=False)
     print("Saved:", output_csv)
     print(f"Rows: {len(trimmed):,} | Columns: {len(trimmed.columns)} -> {list(trimmed.columns)}")
