@@ -36,7 +36,10 @@ def split_columns(df: pd.DataFrame) -> Tuple[List[str], List[str]]:
     numeric_cols = []
     categorical_cols = []
     for c in df.columns:
-        if pd.api.types.is_numeric_dtype(df[c]):
+        # Treat boolean columns as categorical to avoid numeric quantile issues
+        if pd.api.types.is_bool_dtype(df[c]):
+            categorical_cols.append(c)
+        elif pd.api.types.is_numeric_dtype(df[c]):
             numeric_cols.append(c)
         else:
             categorical_cols.append(c)

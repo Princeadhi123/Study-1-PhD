@@ -1,4 +1,4 @@
 PCA components needed for variance thresholds
 80%: 14
-90%: 16
-95%: 17
+90%: 17
+95%: 18
