@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
+from sklearn.ensemble import RandomForestClassifier
 
 warnings.filterwarnings("ignore", category=UserWarning)
 sns.set(context="notebook", style="whitegrid")
@@ -115,6 +116,184 @@ def plot_hist_kde(series: pd.Series, title: str, outpath: Path):
     plt.savefig(outpath, dpi=150)
     plt.close()
 
+
+def dimensionality_reduction_and_feature_importance(df: pd.DataFrame,
+                                                    numeric_cols: List[str],
+                                                    categorical_cols: List[str],
+                                                    target_col: str,
+                                                    outdir: Path):
+    """
+    Build a one-hot encoded feature matrix, run PCA (unsupervised) to estimate
+    how many components are needed for a chosen variance threshold, and (if a
+    binary target is available) fit a RandomForest to compute feature importances.
+
+    Saves:
+      - dr_pca_explained_variance.csv
+      - dr_pca_summary.txt
+      - dr_pca_loadings.csv
+      - dr_supervised_feature_importance.csv (if target available)
+      - dr_feature_importance_summary.txt (if target available)
+    """
+    # Build design matrix similar to pca_and_clustering
+    use_cols = numeric_cols + categorical_cols
+    tmp = df[use_cols].copy()
+
+    # Coerce numerics
+    for c in numeric_cols:
+        tmp[c] = pd.to_numeric(tmp[c], errors='coerce')
+
+    # One-hot encode categoricals
+    tmp = pd.get_dummies(tmp, columns=categorical_cols, dummy_na=True)
+
+    # Drop columns with all NaN, then fill remaining NaN with column mean
+    tmp = tmp.dropna(axis=1, how='all')
+    tmp = tmp.fillna(tmp.mean(numeric_only=True))
+
+    # Standardize
+    scaler = StandardScaler()
+    X = scaler.fit_transform(tmp.values)
+    feature_names = list(tmp.columns)
+
+    # PCA on the full feature space
+    pca = PCA(n_components=None, random_state=42)
+    X_pca = pca.fit_transform(X)
+
+    var = pca.explained_variance_ratio_
+    cumvar = np.cumsum(var)
+    pcs = np.arange(1, len(var) + 1)
+    pca_df = pd.DataFrame({
+        'PC': pcs,
+        'explained_variance_ratio': var,
+        'cumulative_variance_ratio': cumvar,
+    })
+    pca_df.to_csv(outdir / 'dr_pca_explained_variance.csv', index=False)
+
+    # Scree plot (explained variance per component)
+    plt.figure(figsize=(8,5))
+    plt.plot(pcs, var, marker='o')
+    plt.title('PCA Scree Plot (Explained Variance per PC)')
+    plt.xlabel('Principal Component')
+    plt.ylabel('Explained Variance Ratio')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(outdir / 'dr_pca_scree.png', dpi=150)
+    plt.close()
+
+    # Cumulative variance plot with thresholds
+    plt.figure(figsize=(8,5))
+    plt.plot(pcs, cumvar, marker='o', label='Cumulative variance')
+    for thr, n in [(0.80, None), (0.90, None), (0.95, None)]:
+        plt.axhline(thr, color='gray', linestyle='--', linewidth=1)
+    # Compute counts for vlines after cumvar is defined
+    def n_for(thr: float) -> int:
+        return int(np.searchsorted(cumvar, thr) + 1) if len(cumvar) else 0
+    n80, n90, n95 = n_for(0.80), n_for(0.90), n_for(0.95)
+    for thr, n in [(0.80, n80), (0.90, n90), (0.95, n95)]:
+        if n:
+            plt.axvline(n, color='red', linestyle=':', linewidth=1)
+            plt.text(n, thr + 0.02, f'{int(thr*100)}% @ {n}', color='red')
+    plt.ylim(0, 1.02)
+    plt.title('PCA Cumulative Explained Variance')
+    plt.xlabel('Principal Component')
+    plt.ylabel('Cumulative Variance Ratio')
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(outdir / 'dr_pca_cumulative.png', dpi=150)
+    plt.close()
+
+    # Summary for common thresholds
+    # n80, n90, n95 computed above for plots
+    with open(outdir / 'dr_pca_summary.txt', 'w', encoding='utf-8') as f:
+        f.write(f"PCA components needed for variance thresholds\n")
+        f.write(f"80%: {n80}\n90%: {n90}\n95%: {n95}\n")
+
+    # Loadings: features x components
+    loadings = pd.DataFrame(pca.components_.T, index=feature_names, columns=[f'PC{i+1}' for i in range(pca.components_.shape[0])])
+    loadings.to_csv(outdir / 'dr_pca_loadings.csv')
+
+    # Biplot for top loading features on PC1/PC2
+    if loadings.shape[1] >= 2:
+        pc1 = loadings['PC1']
+        pc2 = loadings['PC2']
+        strength = np.sqrt(pc1.values**2 + pc2.values**2)
+        top_n = 12
+        idx = np.argsort(-strength)[:top_n]
+        plt.figure(figsize=(8,8))
+        # Draw unit circle for reference
+        circle = plt.Circle((0,0), 1.0, color='lightgray', fill=False, linestyle='--')
+        ax = plt.gca()
+        ax.add_artist(circle)
+        scale = 1.0  # loadings already scaled for standardized features
+        for i in idx:
+            x, y = pc1.values[i]*scale, pc2.values[i]*scale
+            plt.arrow(0, 0, x, y, head_width=0.02, head_length=0.03, fc='tab:blue', ec='tab:blue', alpha=0.8, length_includes_head=True)
+            plt.text(x*1.08, y*1.08, loadings.index[i], fontsize=8)
+        plt.axhline(0, color='black', linewidth=1)
+        plt.axvline(0, color='black', linewidth=1)
+        plt.title('PCA Biplot: Top Loadings on PC1/PC2')
+        plt.xlabel('PC1 loadings')
+        plt.ylabel('PC2 loadings')
+        plt.xlim(-1.1, 1.1)
+        plt.ylim(-1.1, 1.1)
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.tight_layout()
+        plt.savefig(outdir / 'dr_pca_biplot_top12.png', dpi=150)
+        plt.close()
+
+    # Supervised feature importance (if valid target available)
+    if target_col and target_col in df.columns:
+        y = pd.to_numeric(df[target_col], errors='coerce')
+        # Restrict to rows with valid target (0/1) and not NaN
+        mask_valid = y.isin([0, 1])
+        X_valid = X[mask_valid.values]
+        y_valid = y[mask_valid].astype(int).values
+        if len(y_valid) >= 10 and X_valid.shape[0] == len(y_valid):
+            rf = RandomForestClassifier(n_estimators=300, random_state=42, class_weight='balanced')
+            rf.fit(X_valid, y_valid)
+            imp = rf.feature_importances_
+            imp_df = pd.DataFrame({'feature': feature_names, 'importance': imp}).sort_values('importance', ascending=False)
+            imp_df.to_csv(outdir / 'dr_supervised_feature_importance.csv', index=False)
+
+            # Bar plot for top-N features
+            top_n = 20 if len(imp_df) >= 20 else len(imp_df)
+            top_df = imp_df.head(top_n).iloc[::-1]  # reverse for horizontal bar from smallest to largest
+            plt.figure(figsize=(8, max(5, top_n * 0.35)))
+            plt.barh(top_df['feature'], top_df['importance'], color='#5B9BD5')
+            plt.title(f'RandomForest Feature Importance (Top {top_n})')
+            plt.xlabel('Importance')
+            plt.tight_layout()
+            plt.savefig(outdir / 'dr_rf_feature_importance_topN.png', dpi=150)
+            plt.close()
+
+            # Cumulative importance curve
+            plt.figure(figsize=(8,5))
+            cum = imp_df['importance'].cumsum() / imp_df['importance'].sum()
+            plt.plot(range(1, len(cum)+1), cum, marker='o')
+            plt.axhline(0.90, color='gray', linestyle='--')
+            k90 = int(np.searchsorted(cum.values, 0.90) + 1) if len(cum) else 0
+            if k90:
+                plt.axvline(k90, color='red', linestyle=':')
+                plt.text(k90, 0.92, f'90% @ {k90}', color='red')
+            plt.ylim(0, 1.02)
+            plt.title('Cumulative RandomForest Feature Importance')
+            plt.xlabel('Number of top features')
+            plt.ylabel('Cumulative importance')
+            plt.grid(True, alpha=0.3)
+            plt.tight_layout()
+            plt.savefig(outdir / 'dr_rf_feature_importance_cumulative.png', dpi=150)
+            plt.close()
+
+            # Number of top features to reach 90% cumulative importance
+            cumsum = imp_df['importance'].cumsum() / imp_df['importance'].sum()
+            k90 = int(np.searchsorted(cumsum.values, 0.90) + 1) if len(cumsum) else 0
+            with open(outdir / 'dr_feature_importance_summary.txt', 'w', encoding='utf-8') as f:
+                f.write(f"Top features to reach 90% cumulative RF importance: {k90}\n")
+
+            print(f"[DR] PCA n80={n80}, n90={n90}, n95={n95} | RF top-k for 90% importance: {k90}")
+        else:
+            print(f"[DR] Skipped supervised feature importance (insufficient valid target rows). PCA n80={n80}, n90={n90}, n95={n95}")
+    else:
+        print(f"[DR] No target column provided; reported PCA only. n80={n80}, n90={n90}, n95={n95}")
 
 def plot_box(series: pd.Series, title: str, outpath: Path):
     plt.figure(figsize=(6,5))
@@ -390,6 +569,16 @@ def main():
 
     if num_cols_for_ml or cat_cols_for_ml:
         pca_and_clustering(df, num_cols_for_ml, cat_cols_for_ml, color_col=color_col if color_col else '', outdir=outdir)
+
+    # Dimensionality reduction and feature importance reports
+    if num_cols_for_ml or cat_cols_for_ml:
+        dimensionality_reduction_and_feature_importance(
+            df,
+            num_cols_for_ml,
+            cat_cols_for_ml,
+            target_col=candidate_target if candidate_target else '',
+            outdir=outdir
+        )
 
     print("All outputs saved to:", outdir)
 
