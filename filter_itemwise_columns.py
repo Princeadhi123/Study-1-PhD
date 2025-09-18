@@ -40,6 +40,19 @@ def main():
     # Keep only the requested columns, in the requested order
     trimmed = df.loc[:, present_cols]
 
+    # Normalize sex to 'M', 'F', or 'U' (unknown)
+    if "sex" in trimmed.columns:
+        # Work on a cleaned string version, strip non-letters for robust mapping
+        sex_raw = trimmed["sex"]
+        sex_norm = sex_raw.astype(str).str.strip().str.lower().str.replace(r"[^a-z]", "", regex=True)
+        mapping = {
+            "boy": "M", "b": "M", "male": "M", "m": "M", "man": "M",
+            "girl": "F", "gir": "F", "g": "F", "female": "F", "f": "F", "woman": "F",
+        }
+        mapped = sex_norm.map(mapping)
+        trimmed["sex"] = mapped.fillna("U")
+        print("Normalized 'sex' to M/F/U. Counts:", trimmed["sex"].value_counts(dropna=False).to_dict())
+
     # Impute missing response_time_sec where possible
     if "response_time_sec" in trimmed.columns:
         # Ensure numeric dtype for safe operations
