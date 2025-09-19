@@ -69,7 +69,7 @@ def compute_thresholds_by_unit(
     df: pd.DataFrame,
     unit_cols: list[str],
     rt_col: str,
-    method: METHOD = "quantile",
+    method: METHOD = "ln_quantile",
     q: float = 0.10,
     sd_k: float = 2.0,
     min_floor: float = 0.5,
@@ -243,17 +243,20 @@ def plot_rt_hist_with_thresholds(df: pd.DataFrame, group_col: str, rt_col: str, 
 def main():
     parser = argparse.ArgumentParser(description="Detect rapid guessing per item using response time thresholds.")
     base_dir = Path(__file__).parent
-    default_csv = base_dir / "EQTd_DAi_25_itemwise_minimal.csv"
+    # Use the full itemwise export by default (contains item/item_index)
+    default_csv = base_dir / "EQTd_DAi_25_itemwise.csv"
 
     parser.add_argument("--csv", type=Path, default=default_csv, help="Path to itemwise CSV")
     parser.add_argument("--group-col", default="group", help="Grouping column (for unit-by group)")
-    parser.add_argument("--unit-by", choices=["group", "item", "item_in_group"], default="group", help="Unit to compute thresholds over")
+    # Default to item-level thresholds per recent analysis
+    parser.add_argument("--unit-by", choices=["group", "item", "item_in_group"], default="item", help="Unit to compute thresholds over")
     parser.add_argument("--item-col", default="item", help="Item column name (if available)")
     parser.add_argument("--item-index-col", default="item_index", help="Item index column name (if available)")
     parser.add_argument("--id-col", default="IDCode", help="Participant ID column")
     parser.add_argument("--rt-col", default="response_time_sec", help="Response time column (seconds)")
     parser.add_argument("--resp-col", default="response", help="Response/correctness column (0/1 if available)")
-    parser.add_argument("--method", choices=["quantile", "sdlog", "ln_quantile", "mixture"], default="quantile", help="Thresholding method")
+    # Default to ln-quantile(q=0.10) per item (robust, adaptive)
+    parser.add_argument("--method", choices=["quantile", "sdlog", "ln_quantile", "mixture"], default="ln_quantile", help="Thresholding method")
     parser.add_argument("--q", type=float, default=0.10, help="Quantile for method=quantile")
     parser.add_argument("--sd-k", type=float, default=2.0, help="k in exp(mu - k*sd) for method=sdlog")
     parser.add_argument("--min-floor", type=float, default=0.5, help="Minimum threshold in seconds")
