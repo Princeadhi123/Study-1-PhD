@@ -134,13 +134,20 @@ def prepare_tabular_features(df: pd.DataFrame, use_item: bool = True, use_group:
         ti = (ti - ti.mean()) / (ti.std(ddof=1) + 1e-9)
         feats.append(pd.DataFrame({"time_index_z": ti}))
     if config.COL_RT in df.columns:
-        # add log RT as optional weak feature
-        rts = pd.to_numeric(df[config.COL_RT], errors="coerce").fillna(df[config.COL_RT].median())
-        feats.append(pd.DataFrame({"log_rt": np.log(rts + 1e-3)}))
+        # add log RT as optional weak feature; robust to negatives/NaNs
+        rts = pd.to_numeric(df[config.COL_RT], errors="coerce")
+        # clip negatives to zero, then impute remaining NaNs with non-negative median
+        rts = rts.clip(lower=0)
+        med = rts[rts >= 0].median()
+        rts = rts.fillna(0 if np.isnan(med) else med)
+        # use log1p to avoid log(0) issues
+        feats.append(pd.DataFrame({"log_rt": np.log1p(rts)}))
     if not feats:
         return pd.DataFrame(index=df.index)
     X = pd.concat(feats, axis=1)
     X.columns = [str(c) for c in X.columns]
+    # Ensure no NaNs/Infs are passed to downstream models
+    X = X.replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return X
 
 
