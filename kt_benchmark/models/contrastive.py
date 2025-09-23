@@ -52,11 +52,11 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         return {"category": "Contrastive/Self-supervised", "name": "CLKT-lite", "why": why, "error": "No positive pairs formed"}
 
     # Contrastive model: learn item embeddings with triplet loss
-    dim = 32
+    dim = int(getattr(config, "CLKT_PRE_DIM", 32))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     emb = nn.Embedding(n_items, dim).to(device)
     loss_fn = nn.TripletMarginLoss(margin=1.0, p=2)
-    opt = torch.optim.Adam(emb.parameters(), lr=1e-2)
+    opt = torch.optim.Adam(emb.parameters(), lr=float(getattr(config, "CLKT_PRE_LR", 1e-2)))
 
     def sample_batch(batch_size: int = 256):
         # sample positives, and random negatives different from anchor
@@ -76,9 +76,10 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         return torch.tensor(A, dtype=torch.long, device=device), torch.tensor(P, dtype=torch.long, device=device), torch.tensor(N, dtype=torch.long, device=device)
 
     emb.train()
-    steps = 400  # small pretraining
+    steps = int(getattr(config, "CLKT_PRE_STEPS", 400))  # pretraining iterations
+    batch = int(getattr(config, "CLKT_PRE_BATCH", 256))
     for _ in range(steps):
-        a, p, n = sample_batch(256)
+        a, p, n = sample_batch(batch)
         va, vp, vn = emb(a), emb(p), emb(n)
         loss = loss_fn(va, vp, vn)
         opt.zero_grad()
@@ -131,7 +132,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     Xtr = scaler.fit_transform(X_tr[mask_tr].values)
     Xte = scaler.transform(X_te[mask_te].values)
 
-    clf = LogisticRegression(max_iter=1000, class_weight="balanced", solver="lbfgs", random_state=config.RANDOM_STATE)
+    clf = LogisticRegression(max_iter=getattr(config, "CLKT_SUP_MAX_ITER", 1000), class_weight="balanced", solver="lbfgs", random_state=config.RANDOM_STATE)
     clf.fit(Xtr, y_tr[mask_tr].astype(int).values)
     y_prob = np.full(shape=len(test_df), fill_value=np.nan, dtype=float)
     y_prob[mask_te.values] = clf.predict_proba(Xte)[:, 1]

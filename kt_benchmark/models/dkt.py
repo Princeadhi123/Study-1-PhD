@@ -84,8 +84,8 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             y_pad[i, :L] = torch.tensor(y, dtype=torch.long)
         return it_pad, y_pad, torch.tensor(lengths, dtype=torch.long)
 
-    train_loader = DataLoader(SeqDataset(train_seqs), batch_size=32, shuffle=True, collate_fn=collate)
-    test_loader = DataLoader(SeqDataset(test_seqs), batch_size=32, shuffle=False, collate_fn=collate)
+    train_loader = DataLoader(SeqDataset(train_seqs), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=True, collate_fn=collate)
+    test_loader = DataLoader(SeqDataset(test_seqs), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=False, collate_fn=collate)
 
     class DKT(nn.Module):
         def __init__(self, vocab: int, emb: int = 32, hid: int = 64):
@@ -103,9 +103,9 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             return logits
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = DKT(vocab=vocab_size).to(device)
+    model = DKT(vocab=vocab_size, emb=getattr(config, "DKT_EMB_DIM", 32), hid=getattr(config, "DKT_HID_DIM", 64)).to(device)
     crit = nn.BCEWithLogitsLoss(reduction="none")
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    opt = torch.optim.Adam(model.parameters(), lr=float(getattr(config, "DKT_LR", 1e-3)))
 
     # Train
     model.train()

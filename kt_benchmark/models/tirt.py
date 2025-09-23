@@ -39,7 +39,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     X_tr = scaler.fit_transform(X_tr)
     X_te = scaler.transform(X_te)
 
-    clf = LogisticRegression(max_iter=1000, class_weight="balanced", solver="saga", penalty="l2", random_state=config.RANDOM_STATE)
+    clf = LogisticRegression(max_iter=getattr(config, "TIRT_MAX_ITER", 1000), class_weight="balanced", solver="saga", penalty="l2", random_state=config.RANDOM_STATE)
     clf.fit(X_tr, y_tr)
     y_prob = clf.predict_proba(X_te)[:, 1]
 

@@ -146,7 +146,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "with logistic link. It provides an interpretable baseline in the psychometric family."
     )
     try:
-        model = Rasch1PL()
+        model = Rasch1PL(max_iter=getattr(config, "RASCH_MAX_ITER", 30), inner_iter=getattr(config, "RASCH_INNER_ITER", 3))
         model.fit(df, train_idx)
         y_true = pd.to_numeric(df.iloc[test_idx][config.COL_RESP], errors="coerce").values
         y_prob = model.predict_proba(df, test_idx)

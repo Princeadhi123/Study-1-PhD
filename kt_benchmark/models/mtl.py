@@ -78,14 +78,14 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             rt = self.head_rt(h).squeeze(-1)
             return logit, rt
 
-    model = MTL(d_in=X_tr.shape[1]).to(device)
+    model = MTL(d_in=X_tr.shape[1], d_hid=getattr(config, "MTL_HID_DIM", 64)).to(device)
     bce = nn.BCEWithLogitsLoss()
     mse = nn.MSELoss(reduction="none")
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3)
+    opt = torch.optim.Adam(model.parameters(), lr=float(getattr(config, "MTL_LR", 1e-3)))
 
     # Train
     model.train()
-    batch_size = 128
+    batch_size = int(getattr(config, "MTL_BATCH", 128))
     n = Xt.shape[0]
     for epoch in range(max(1, config.EPOCHS_MTL)):
         perm = torch.randperm(n)

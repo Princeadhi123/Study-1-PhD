@@ -56,7 +56,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     # Build adjacency and compute neighbor-smoothed difficulty
     adj = _build_group_graph(train_df)
     smoothed: Dict[str, float] = {}
-    alpha = 0.7  # weight for own group difficulty
+    alpha = float(getattr(config, "GKT_SMOOTH_ALPHA", 0.7))  # weight for own group difficulty
     for g in grp_mean.index.astype(str):
         p_g = float(grp_mean.get(g, global_mean))
         if not adj.empty and g in adj.index:

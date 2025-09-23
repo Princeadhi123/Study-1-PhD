@@ -17,11 +17,11 @@ class BKTParams:
     S: float   # slip probability
 
 
-# Simple coarse grid to avoid complex EM; robust and fast
-GRID_L0 = [0.05, 0.10, 0.20, 0.30]
-GRID_T = [0.05, 0.10, 0.20]
-GRID_G = [0.05, 0.10, 0.20]
-GRID_S = [0.05, 0.10, 0.20]
+# Simple coarse grid to avoid complex EM; robust and fast (configurable)
+GRID_L0 = getattr(config, "BKT_GRID_L0", [0.05, 0.10, 0.20, 0.30])
+GRID_T = getattr(config, "BKT_GRID_T", [0.05, 0.10, 0.20])
+GRID_G = getattr(config, "BKT_GRID_G", [0.05, 0.10, 0.20])
+GRID_S = getattr(config, "BKT_GRID_S", [0.05, 0.10, 0.20])
 
 
 def _ll_for_group(seq_list: List[np.ndarray], p: BKTParams) -> float:

@@ -110,7 +110,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
 
     # Train logistic on aligned source
     from sklearn.linear_model import LogisticRegression
-    clf = LogisticRegression(max_iter=1000, class_weight="balanced", solver="lbfgs", random_state=config.RANDOM_STATE)
+    clf = LogisticRegression(max_iter=getattr(config, "ADAPT_MAX_ITER", 1000), class_weight="balanced", solver="lbfgs", random_state=config.RANDOM_STATE)
     clf.fit(Xs_aligned, y_s)
 
     # Evaluate on aligned target eval rows
