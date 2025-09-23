@@ -60,6 +60,20 @@ def main():
     # Keep only the requested columns, in the requested order
     trimmed = df.loc[:, present_cols]
 
+    # Recompute per-student sequential 'orig_order' = 1..n preserving current row order
+    # This fixes cases where 'orig_order' was a constant per student (e.g., Excel row id)
+    if "IDCode" in trimmed.columns:
+        trimmed["orig_order"] = trimmed.groupby("IDCode").cumcount() + 1
+        try:
+            trimmed["orig_order"] = trimmed["orig_order"].astype("Int64")
+        except Exception:
+            # Fallback to best-effort integer cast
+            try:
+                trimmed["orig_order"] = trimmed["orig_order"].astype(int)
+            except Exception:
+                pass
+        print("Recomputed 'orig_order' to be 1..n per IDCode (sequence preserved).")
+
     # Normalize sex to 'M', 'F', or 'U' (unknown)
     if "sex" in trimmed.columns:
         # Work on a cleaned string version, strip non-letters for robust mapping
@@ -92,6 +106,10 @@ def main():
             after_na = int(trimmed["response_time_sec"].isna().sum())
             filled = before_na - after_na
             print(f"Imputed response_time_sec: filled {filled} missing values (remaining {after_na}).")
+
+    # Ensure final column order matches the desired list exactly (drop any extras)
+    final_cols = [c for c in desired_columns if c in trimmed.columns]
+    trimmed = trimmed.loc[:, final_cols]
 
     # If overwriting, create a timestamped backup first
     if args.overwrite:
