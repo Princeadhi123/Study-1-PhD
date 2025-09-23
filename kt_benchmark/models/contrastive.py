@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Tuple
 
 import numpy as np
 import pandas as pd
+import time
 
 from .. import config
 from ..utils import student_sequences, one_hot
@@ -78,7 +79,11 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     emb.train()
     steps = int(getattr(config, "CLKT_PRE_STEPS", 400))  # pretraining iterations
     batch = int(getattr(config, "CLKT_PRE_BATCH", 256))
+    start_time = time.perf_counter()
+    budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
     for _ in range(steps):
+        if budget is not None and (time.perf_counter() - start_time) > float(budget):
+            break
         a, p, n = sample_batch(batch)
         va, vp, vn = emb(a), emb(p), emb(n)
         loss = loss_fn(va, vp, vn)

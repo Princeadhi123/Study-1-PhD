@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
@@ -120,9 +121,12 @@ def main():
 
     for run_fn, name, category in runners:
         print(f"Running {category} :: {name}")
+        t0 = time.perf_counter()
         res = run_fn(df, train_idx, test_idx)
+        runtime_sec = float(time.perf_counter() - t0)
         # Keep a copy for details
         details[name] = {k: (float(v) if isinstance(v, (np.floating,)) else v) for k, v in res.items() if k not in ("y_true", "y_prob")}
+        details[name]["runtime_sec"] = runtime_sec
 
         # Save predictions when available
         tag = name.lower().replace(" ", "_").replace("/", "-")
@@ -130,6 +134,7 @@ def main():
 
         # Summarize metrics
         row = summarize_result(name=name, category=category, why=res.get("why", ""), result=res)
+        row["runtime_sec"] = runtime_sec
         rows.append(row)
 
     # Summary table
@@ -145,7 +150,7 @@ def main():
         lines.append(f"- **{r['category']} — {r['model']}**: {r.get('why','').strip()}\n")
     lines.append("\n## Metrics (higher is better unless noted)\n\n")
     show_cols = [
-        "category", "model", "n", "roc_auc", "accuracy", "avg_precision", "f1", "precision", "recall", "brier", "log_loss",
+        "category", "model", "n", "roc_auc", "accuracy", "avg_precision", "f1", "precision", "recall", "brier", "log_loss", "runtime_sec",
     ]
     present = [c for c in show_cols if c in summ.columns]
     if present:

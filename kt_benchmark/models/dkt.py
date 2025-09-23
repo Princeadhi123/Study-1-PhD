@@ -4,6 +4,7 @@ from typing import Dict, Any, List, Tuple
 
 import numpy as np
 import pandas as pd
+import time
 
 from .. import config
 from ..utils import student_sequences
@@ -107,9 +108,13 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     crit = nn.BCEWithLogitsLoss(reduction="none")
     opt = torch.optim.Adam(model.parameters(), lr=float(getattr(config, "DKT_LR", 1e-3)))
 
-    # Train
+    # Train (respect time budget)
     model.train()
+    start_time = time.perf_counter()
+    budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
     for epoch in range(max(1, config.EPOCHS_DKT)):
+        if budget is not None and (time.perf_counter() - start_time) > float(budget):
+            break
         for it_pad, y_pad, lengths in train_loader:
             it_pad = it_pad.to(device)
             y_pad = y_pad.to(device)

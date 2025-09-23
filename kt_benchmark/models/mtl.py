@@ -4,6 +4,7 @@ from typing import Dict, Any, List
 
 import numpy as np
 import pandas as pd
+import time
 
 from .. import config
 from ..utils import prepare_tabular_features
@@ -83,11 +84,15 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     mse = nn.MSELoss(reduction="none")
     opt = torch.optim.Adam(model.parameters(), lr=float(getattr(config, "MTL_LR", 1e-3)))
 
-    # Train
+    # Train (respect time budget)
     model.train()
     batch_size = int(getattr(config, "MTL_BATCH", 128))
     n = Xt.shape[0]
+    start_time = time.perf_counter()
+    budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
     for epoch in range(max(1, config.EPOCHS_MTL)):
+        if budget is not None and (time.perf_counter() - start_time) > float(budget):
+            break
         perm = torch.randperm(n)
         for i in range(0, n, batch_size):
             idx = perm[i:i+batch_size]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 from typing import Dict, Tuple, Any
 
@@ -11,7 +12,14 @@ from .. import config
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
-    return 1.0 / (1.0 + np.exp(-x))
+    # Numerically stable sigmoid
+    x = np.asarray(x, dtype=float)
+    out = np.empty_like(x, dtype=float)
+    pos = x >= 0
+    out[pos] = 1.0 / (1.0 + np.exp(-x[pos]))
+    expx = np.exp(x[~pos])
+    out[~pos] = expx / (1.0 + expx)
+    return out
 
 
 @dataclass
@@ -79,7 +87,11 @@ class Rasch1PL:
             return float(-np.sum(y * np.log(p) + (1 - y) * np.log(1 - p)))
 
         last_loss = nll()
+        start_time = time.perf_counter()
+        budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
         for it in range(self.max_iter):
+            if budget is not None and (time.perf_counter() - start_time) > float(budget):
+                break
             # Update theta per user via Newton steps
             for i in range(n_users):
                 idx = idx_by_user[i]

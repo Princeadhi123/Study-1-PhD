@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Tuple, Any, List
 
+import time
 import numpy as np
 import pandas as pd
 
@@ -102,11 +103,15 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     if config.COL_GROUP not in df.columns or config.COL_RESP not in df.columns or config.COL_ID not in df.columns:
         return {"category": "Bayesian", "name": "BKT", "why": why, "error": "Required columns missing (group/response/ID)"}
 
-    # Fit per-group params on train only
+    # Fit per-group params on train only (respect time budget)
     train_df = df.iloc[train_idx].copy()
     train_df = train_df.dropna(subset=[config.COL_RESP])
     group_params: Dict[str, BKTParams] = {}
+    start_time = time.perf_counter()
+    budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
     for g, sub in train_df.groupby(config.COL_GROUP, dropna=False):
+        if budget is not None and (time.perf_counter() - start_time) > float(budget):
+            break
         p = _fit_group_params(sub)
         group_params[str(g)] = p
 

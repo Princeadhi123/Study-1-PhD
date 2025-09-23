@@ -29,6 +29,11 @@ EPOCHS_DKT = 20          # DKT epochs
 EPOCHS_MTL = 20          # FKT-lite epochs
 EPOCHS_CLKT = 10         # If used by any CLKT fine-tuning variants
 
+# Fairness: per-model wall-clock budget (seconds). Models with iterative loops
+# will respect this budget and stop early once exceeded. Non-iterative models
+# (e.g., scikit-learn solvers) may ignore it but typically finish under budget.
+TRAIN_TIME_BUDGET_S = 120
+
 # Rasch (1PL)
 RASCH_MAX_ITER = 100
 RASCH_INNER_ITER = 5
