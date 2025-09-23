@@ -1,5 +1,8 @@
 from pathlib import Path
 import sys
+import argparse
+from datetime import datetime
+import shutil
 
 try:
     import pandas as pd
@@ -10,15 +13,32 @@ except ImportError as e:
 
 def main():
     base_dir = Path(__file__).parent
-    input_csv = base_dir / "EQTd_DAi_25_itemwise.csv"
-    output_csv = base_dir / "EQTd_DAi_25_itemwise_minimal.csv"
 
+    parser = argparse.ArgumentParser(description="Trim EQTd_DAi_25_itemwise.csv to minimal columns required by KT benchmark models.")
+    parser.add_argument("--input", type=str, default=str((base_dir / "EQTd_DAi_25_itemwise.csv").resolve()), help="Path to the input itemwise CSV")
+    parser.add_argument("--output", type=str, default=None, help="Path to write the trimmed CSV (default saves alongside as *_minimal.csv). If --overwrite is set, this is ignored.")
+    parser.add_argument("--overwrite", action="store_true", help="If set, back up the input CSV and overwrite it in place with the minimal columns.")
+    args = parser.parse_args()
+
+    input_csv = Path(args.input)
+    # Decide output path
+    if args.overwrite:
+        output_csv = input_csv
+    else:
+        if args.output:
+            output_csv = Path(args.output)
+        else:
+            output_csv = input_csv.with_name(input_csv.stem + "_minimal" + input_csv.suffix)
+
+    # Minimal columns needed across all 9 models
     desired_columns = [
-        "IDCode",
-        "sex",
-        "group",
-        "response",
-        "response_time_sec",
+        "IDCode",            # student id (all models)
+        "orig_order",        # sequencing/time index (BKT/TIRT/DKT/etc.)
+        "item",              # item identifier (Rasch/LogReg/TIRT/Contrastive/etc.)
+        "group",             # skill/KC (BKT/GKT/Adapt/LogReg/TIRT)
+        "response",          # binary label (all predictive models)
+        "response_time_sec", # auxiliary target (MTL) and optional feature
+        "sex",               # standardized covariate (LogReg/MTL/Adapt)
     ]
 
     if not input_csv.exists():
@@ -72,6 +92,16 @@ def main():
             after_na = int(trimmed["response_time_sec"].isna().sum())
             filled = before_na - after_na
             print(f"Imputed response_time_sec: filled {filled} missing values (remaining {after_na}).")
+
+    # If overwriting, create a timestamped backup first
+    if args.overwrite:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_csv = input_csv.with_name(f"{input_csv.stem}_backup_{ts}{input_csv.suffix}")
+        try:
+            shutil.copy2(input_csv, backup_csv)
+            print("Backed up original to:", backup_csv)
+        except Exception as e:
+            print("Warning: failed to back up original:", e)
 
     trimmed.to_csv(output_csv, index=False)
     print("Saved:", output_csv)
