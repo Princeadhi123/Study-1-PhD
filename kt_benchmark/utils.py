@@ -263,7 +263,10 @@ def sequences_by(df: pd.DataFrame, key_cols: List[str]) -> Dict[Tuple, pd.DataFr
 def student_sequences(df: pd.DataFrame) -> Dict[Tuple[str], pd.DataFrame]:
     if config.COL_ID not in df.columns:
         return {(): df.copy()}
-    return sequences_by(df, [config.COL_ID])
+    df2 = df.copy()
+    # Normalize ID to string so downstream lookups using str IDs match
+    df2[config.COL_ID] = df2[config.COL_ID].astype(str)
+    return sequences_by(df2, [config.COL_ID])
 
 
 def student_group_sequences(df: pd.DataFrame) -> Dict[Tuple[str, str], pd.DataFrame]:

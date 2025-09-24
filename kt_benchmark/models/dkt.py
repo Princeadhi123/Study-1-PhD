@@ -8,6 +8,7 @@ import time
 
 from .. import config
 from ..utils import student_sequences
+from sklearn.model_selection import train_test_split
 
 
 def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[str, Any]:
@@ -37,16 +38,18 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     pad_idx = 0
     vocab_size = len(it2ix) + 1
 
-    # Build sequences per student
-    seq_map = student_sequences(df[[config.COL_ID, item_col, config.COL_ORDER, config.COL_RESP]].dropna(subset=[config.COL_RESP]))
+    # Build sequences per student from a filtered, normalized view of df
+    df_seq = df[[config.COL_ID, item_col, config.COL_ORDER, config.COL_RESP]].copy()
+    df_seq = df_seq.dropna(subset=[config.COL_RESP])
+    df_seq[config.COL_ID] = df_seq[config.COL_ID].astype(str)
+    df_seq = df_seq.sort_values([config.COL_ID, config.COL_ORDER])
 
     def build_sequences(student_ids: List[str]) -> List[Tuple[np.ndarray, np.ndarray]]:
         seqs: List[Tuple[np.ndarray, np.ndarray]] = []
         for sid in student_ids:
-            key = (sid,)
-            if key not in seq_map:
+            sub = df_seq.loc[df_seq[config.COL_ID] == sid]
+            if sub.empty:
                 continue
-            sub = seq_map[key].sort_values(config.COL_ORDER)
             items_all = sub[item_col].astype(str).map(lambda x: it2ix.get(x, 0)).values
             y_series = pd.to_numeric(sub[config.COL_RESP], errors="coerce")
             mask = y_series.isin([0, 1]).values
@@ -54,15 +57,58 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
                 continue
             items = items_all[mask]
             y = y_series[mask].astype(int).values
-            # Keep sequences with at least 2 steps
-            if len(y) >= 2:  # need some signal
+            # Keep sequences with at least 1 labeled step (DKT can handle length-1)
+            if len(y) >= 1:  # be permissive to avoid empty splits
                 seqs.append((items, y))
         return seqs
 
     train_seqs = build_sequences(sorted(train_students))
     test_seqs = build_sequences(sorted(test_students))
+    # Diagnostics
+    diag = {
+        "train_student_count": len(train_students),
+        "test_student_count": len(test_students),
+        "train_seq_count": len(train_seqs),
+        "test_seq_count": len(test_seqs),
+        "fallback_used": False,
+    }
+    # Fallback: if either split has zero sequences, re-split among students who actually have sequences
     if not train_seqs or not test_seqs:
-        return {"category": "Deep Learning", "name": "DKT (minimal)", "why": why, "error": "No valid train/test sequences"}
+        all_students = sorted(df_seq[config.COL_ID].astype(str).unique())
+
+        def student_has_seq(sid: str) -> bool:
+            sub = df_seq.loc[df_seq[config.COL_ID] == sid]
+            if sub.empty:
+                return False
+            y_series = pd.to_numeric(sub[config.COL_RESP], errors="coerce")
+            return y_series.isin([0, 1]).sum() >= 1
+
+        students_with_seq = [sid for sid in all_students if student_has_seq(sid)]
+        if len(students_with_seq) >= 2:
+            tr_fb, te_fb = train_test_split(
+                students_with_seq,
+                test_size=float(getattr(config, "TEST_SIZE", 0.2)),
+                random_state=int(getattr(config, "RANDOM_STATE", 42)),
+                shuffle=True,
+            )
+            train_seqs = build_sequences(sorted(tr_fb))
+            test_seqs = build_sequences(sorted(te_fb))
+            diag.update({
+                "fallback_used": True,
+                "train_student_count_fallback": len(tr_fb),
+                "test_student_count_fallback": len(te_fb),
+                "train_seq_count_fallback": len(train_seqs),
+                "test_seq_count_fallback": len(test_seqs),
+            })
+
+    if not train_seqs or not test_seqs:
+        return {
+            "category": "Deep Learning",
+            "name": "DKT (minimal)",
+            "why": why,
+            "error": "No valid train/test sequences",
+            **diag,
+        }
 
     # Pad and batch via DataLoader
     class SeqDataset(torch.utils.data.Dataset):
@@ -147,7 +193,13 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
                 y_prob_all.extend(y_prob.tolist())
 
     if not y_true_all:
-        return {"category": "Deep Learning", "name": "DKT (minimal)", "why": why, "error": "No eval points"}
+        return {
+            "category": "Deep Learning",
+            "name": "DKT (minimal)",
+            "why": why,
+            "error": "No eval points",
+            **diag,
+        }
 
     return {
         "category": "Deep Learning",
@@ -155,4 +207,5 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "why": why,
         "y_true": np.array(y_true_all),
         "y_prob": np.array(y_prob_all),
+        **diag,
     }
