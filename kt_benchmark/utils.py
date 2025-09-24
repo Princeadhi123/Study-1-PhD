@@ -7,6 +7,13 @@ from typing import Dict, List, Tuple, Optional
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder
+try:
+    from scipy import sparse as _sp
+    _SP_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _sp = None  # type: ignore
+    _SP_AVAILABLE = False
 
 from . import config
 
@@ -114,7 +121,8 @@ def build_dataset(min_events: int | None = None) -> Dataset:
 # Feature builders for non-sequence models
 
 def one_hot(series: pd.Series) -> pd.DataFrame:
-    return pd.get_dummies(series.astype("category"), dummy_na=True)
+    # Use smaller dtype to reduce memory when using dense dummies
+    return pd.get_dummies(series.astype("category"), dummy_na=True, dtype=np.uint8)
 
 
 def prepare_tabular_features(df: pd.DataFrame, use_item: bool = True, use_group: bool = True, use_sex: bool = True, use_time: bool = True) -> pd.DataFrame:
@@ -149,6 +157,97 @@ def prepare_tabular_features(df: pd.DataFrame, use_item: bool = True, use_group:
     # Ensure no NaNs/Infs are passed to downstream models
     X = X.replace([np.inf, -np.inf], np.nan).fillna(0.0)
     return X
+
+
+def _ohe_single_feature(values: pd.Series, feature_name: str):
+    # scikit-learn >= 1.2 uses 'sparse_output' instead of 'sparse'
+    try:
+        enc = OneHotEncoder(handle_unknown="ignore", sparse_output=True, dtype=np.float32)
+    except TypeError:  # fallback for older versions
+        enc = OneHotEncoder(handle_unknown="ignore", sparse=True, dtype=np.float32)
+    X_part = enc.fit_transform(values.astype(str).to_frame())
+    try:
+        names = enc.get_feature_names_out([feature_name]).tolist()
+    except AttributeError:
+        # Older scikit-learn
+        names = enc.get_feature_names([feature_name]).tolist()
+    if _SP_AVAILABLE:
+        return X_part.tocsr(), names
+    else:
+        # Return a dense numpy array fallback when SciPy is not available
+        return X_part.toarray(), names
+
+
+def prepare_tabular_features_sparse(
+    df: pd.DataFrame,
+    use_item: bool = True,
+    use_group: bool = True,
+    use_sex: bool = True,
+    use_time: bool = True,
+) -> tuple[_sp.csr_matrix, List[str]]:
+    """
+    Build a sparse design matrix for tabular models. This is functionally similar to
+    prepare_tabular_features(), but returns a scipy.sparse CSR matrix and the list of
+    feature names. Using sparse representations drastically reduces memory/time when
+    item/group cardinalities are high (e.g., ASSISTments).
+    """
+    parts: List[object] = []
+    names: List[str] = []
+
+    # One-hot categorical parts
+    if use_item:
+        if config.COL_ITEM in df.columns:
+            Xi, ni = _ohe_single_feature(df[config.COL_ITEM], config.COL_ITEM)
+            parts.append(Xi)
+            names.extend(ni)
+        elif config.COL_ITEM_INDEX in df.columns:
+            Xi, ni = _ohe_single_feature(df[config.COL_ITEM_INDEX].astype(str), config.COL_ITEM_INDEX)
+            parts.append(Xi)
+            names.extend(ni)
+
+    if use_group and config.COL_GROUP in df.columns:
+        Xg, ng = _ohe_single_feature(df[config.COL_GROUP], config.COL_GROUP)
+        parts.append(Xg)
+        names.extend(ng)
+
+    if use_sex and config.COL_SEX in df.columns:
+        Xs, ns = _ohe_single_feature(df[config.COL_SEX], config.COL_SEX)
+        parts.append(Xs)
+        names.extend(ns)
+
+    # Continuous parts (as sparse columns)
+    if use_time and "time_index" in df.columns:
+        ti = df["time_index"].astype(float)
+        ti = (ti - ti.mean()) / (ti.std(ddof=1) + 1e-9)
+        vec = ti.to_numpy(dtype=np.float32).reshape(-1, 1)
+        Xti = (_sp.csr_matrix(vec) if _SP_AVAILABLE else vec)
+        parts.append(Xti)
+        names.append("time_index_z")
+
+    if config.COL_RT in df.columns:
+        rts = pd.to_numeric(df[config.COL_RT], errors="coerce")
+        rts = rts.clip(lower=0)
+        med = rts[rts >= 0].median()
+        rts = rts.fillna(0 if np.isnan(med) else med)
+        vec = np.log1p(rts).to_numpy(dtype=np.float32).reshape(-1, 1)
+        Xrt = (_sp.csr_matrix(vec) if _SP_AVAILABLE else vec)
+        parts.append(Xrt)
+        names.append("log_rt")
+
+    if not parts:
+        if _SP_AVAILABLE:
+            return _sp.csr_matrix((len(df), 0), dtype=np.float32), []
+        else:
+            return np.zeros((len(df), 0), dtype=np.float32), []
+
+    if _SP_AVAILABLE:
+        X_sparse = _sp.hstack(parts, format="csr")
+        return X_sparse, names
+    else:
+        # Dense fallback: concatenate numpy arrays
+        dense_parts = [p if isinstance(p, np.ndarray) else p.toarray() for p in parts]  # type: ignore
+        X_dense = np.concatenate(dense_parts, axis=1).astype(np.float32, copy=False)
+        return X_dense, names
 
 
 # Sequences for KT models

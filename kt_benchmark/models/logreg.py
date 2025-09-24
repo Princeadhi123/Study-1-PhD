@@ -5,10 +5,9 @@ from typing import Dict, Any
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import StandardScaler
 
 from .. import config
-from ..utils import prepare_tabular_features
+from ..utils import prepare_tabular_features_sparse
 
 
 def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[str, Any]:
@@ -19,7 +18,13 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     if config.COL_RESP not in df.columns:
         return {"category": "Machine Learning", "name": "LogisticRegression", "why": why, "error": "response column missing"}
 
-    X = prepare_tabular_features(df, use_item=True, use_group=True, use_sex=True, use_time=False)
+    X_sparse, _ = prepare_tabular_features_sparse(
+        df,
+        use_item=True,
+        use_group=getattr(config, "LINEAR_USE_GROUP", True),
+        use_sex=True,
+        use_time=False,
+    )
     y = pd.to_numeric(df[config.COL_RESP], errors="coerce")
     mask = y.isin([0, 1])
 
@@ -28,16 +33,19 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     if tr.size == 0 or te.size == 0:
         return {"category": "Machine Learning", "name": "LogisticRegression", "why": why, "error": "no valid train/test rows"}
 
-    X_tr = X.iloc[tr].values
-    X_te = X.iloc[te].values
+    X_tr = X_sparse[tr]
+    X_te = X_sparse[te]
     y_tr = y.iloc[tr].astype(int).values
     y_te = y.iloc[te].astype(int).values
 
-    scaler = StandardScaler(with_mean=False)
-    X_tr = scaler.fit_transform(X_tr)
-    X_te = scaler.transform(X_te)
-
-    clf = LogisticRegression(max_iter=getattr(config, "LOGREG_MAX_ITER", 1000), class_weight="balanced", solver="saga", penalty="l2", random_state=config.RANDOM_STATE)
+    clf = LogisticRegression(
+        max_iter=getattr(config, "LOGREG_MAX_ITER", 1000),
+        tol=getattr(config, "LOGREG_TOL", 1e-3),
+        class_weight="balanced",
+        solver="saga",
+        penalty="l2",
+        random_state=config.RANDOM_STATE,
+    )
     clf.fit(X_tr, y_tr)
     y_prob = clf.predict_proba(X_te)[:, 1]
 

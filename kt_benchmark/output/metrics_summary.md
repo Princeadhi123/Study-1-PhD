@@ -1,0 +1,38 @@
+# KT Benchmark Summary
+
+Run time: 2025-09-24T21:26:11.636610
+
+## Models
+
+- **Psychometric (IRT) — Rasch1PL**: Rasch (1PL) is the simplest IRT model: a single ability per student and difficulty per item, with logistic link. It provides an interpretable baseline in the psychometric family.
+- **Bayesian — BKT**: Standard BKT is the canonical Bayesian model for KT with interpretable parameters (L0, learn, guess, slip). We fit per-skill (group) using a coarse grid over parameters for robustness and speed.
+- **Machine Learning — LogisticRegression**: Logistic Regression is a strong, transparent ML baseline for binary correctness using tabular features. It is fast, robust to high-dimensional one-hot features, and provides calibrated probabilities.
+- **Deep Learning — DKT (minimal)**: DKT (LSTM-based) is the classic deep learning KT model that captures sequential dependencies. Here we use a minimal version predicting current response from the running hidden state over item embeddings.
+- **Graph — GKT-lite**: GKT-lite builds a knowledge-concept (KC) graph over groups (skills) via co-occurrence of student interactions, then smooths group difficulty over the graph to obtain predictions: p(g) blended with neighbors.
+- **Temporal/Sequential — TIRT-lite**: TIRT-lite augments item effects with a simple temporal progress covariate (z-scored within-student time index). This emulates temporal Item Response Theory by allowing ability to drift over time.
+- **Multi-task — FKT-lite**: FKT-lite: a small shared MLP predicts correctness (primary) and response time (aux) jointly. Multi-task learning can improve representation quality and calibration by leveraging correlated auxiliary signals.
+- **Contrastive/Self-supervised — CLKT-lite**: CLKT-lite: learn item embeddings via contrastive pretraining from train sequences (positive = co-occurring items), then fine-tune a logistic regression using learned embeddings + metadata to predict correctness.
+- **Domain Adaptive — AdaptKT-lite (CORAL)**: AdaptKT-lite performs unsupervised CORAL feature alignment from a source domain (groups in train) to a target domain (unseen or held-out groups in test), then trains a logistic classifier on aligned source and evaluates on aligned target.
+
+## Metrics (higher is better unless noted)
+
+```text
+category, model, n, roc_auc, accuracy, avg_precision, f1, precision, recall, brier, log_loss, runtime_sec
+Psychometric (IRT), Rasch1PL, 10497, 0.39909957958039827, 0.42259693245689245, 0.5380178904269473, 0.4954632481478398, 0.5222885222885223, 0.4712589073634204, 0.5634705153853482, 7.318856881384439, 67.81582479999997
+Bayesian, BKT, 10497, 0.6918939632319335, 0.6839096884824235, 0.726989680200129, 0.770539419087137, 0.6839779005524862, 0.8821852731591449, 0.21781610532595505, 0.6305349506198596, 87.0324757999997
+Machine Learning, LogisticRegression, 10497, 0.7205451255295003, 0.6826712394017338, 0.777939626476151, 0.7510277300246655, 0.711211778029445, 0.7955661124307205, 0.203781822711706, 0.5903195324359798, 0.26442339999994147
+Deep Learning, DKT (minimal), 0, nan, nan, nan, nan, nan, nan, nan, nan, 1.360029299999951
+Graph, GKT-lite, 10497, 0.5666027687942101, 0.6245593979232161, 0.6359032470749522, 0.7615128593040847, 0.616258570029383, 0.9963578780680918, 0.23217550078785815, 0.6567395546513636, 0.02899219999972047
+Temporal/Sequential, TIRT-lite, 10497, 0.7248496648722251, 0.6868629132132991, 0.7821108612338614, 0.7543898976313234, 0.7142048670062252, 0.7993665874901029, 0.2027804898321879, 0.5881352502144924, 0.2511672999999064
+Multi-task, FKT-lite, 10497, 0.6001997021507172, 0.5860722111079356, 0.6831828383523404, 0.7197316648390634, 0.6072050500653026, 0.883452098178939, 0.23674485605633067, 0.6703166658479219, 133.73075830000016
+Contrastive/Self-supervised, CLKT-lite, 10497, 0.6410487127087283, 0.6353243783938268, 0.6928288436721748, 0.7116601385959627, 0.678638126705933, 0.7480601741884402, 0.22649615398400885, 0.6430920534400529, 9.280154699999912
+Domain Adaptive, AdaptKT-lite (CORAL), 1525, 0.6202773308128261, 0.6439344262295082, 0.7080213888088909, 0.7834064619066613, 0.6439344262295082, 1.0, 0.2565465086258022, 0.7272917568963738, 286.6484895000003
+```
+## Best by metric
+
+- **roc_auc**: TIRT-lite (Temporal/Sequential) = 0.7248 (n=10497)
+- **accuracy**: TIRT-lite (Temporal/Sequential) = 0.6869 (n=10497)
+- **avg_precision**: TIRT-lite (Temporal/Sequential) = 0.7821 (n=10497)
+- **f1**: AdaptKT-lite (CORAL) (Domain Adaptive) = 0.7834 (n=1525)
+
+Notes: Brier and log_loss are lower-is-better. Metrics skip models that failed.

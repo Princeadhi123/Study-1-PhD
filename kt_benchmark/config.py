@@ -42,23 +42,26 @@ RASCH_INNER_ITER = 5
 BKT_GRID_L0 = [0.05, 0.10, 0.15, 0.20, 0.30, 0.40]
 BKT_GRID_T  = [0.05, 0.10, 0.15, 0.20, 0.30]
 BKT_GRID_G  = [0.05, 0.10, 0.15, 0.20, 0.25]
-BKT_GRID_S  = [0.05, 0.10, 0.15, 0.20, 0.25]
-
 # Graph smoothing
 GKT_SMOOTH_ALPHA = 0.7
 
 # Logistic Regression max iterations
-LOGREG_MAX_ITER = 5000   # plain LogisticRegression
-TIRT_MAX_ITER   = 5000   # TIRT-lite's logistic head
+LOGREG_MAX_ITER = 500   # plain LogisticRegression
+TIRT_MAX_ITER   = 500   # TIRT-lite's logistic head
 CLKT_SUP_MAX_ITER = 5000 # supervised LR after contrastive pretraining
 ADAPT_MAX_ITER  = 5000   # AdaptKT-lite classifier
+
+# Linear model feature toggles and solver tolerances
+# If Assistments runs are slow due to very high KC/skill cardinality, you can
+# set LINEAR_USE_GROUP = False to drop group one-hots for linear baselines.
+LINEAR_USE_GROUP = True
+LOGREG_TOL = 1e-3
+TIRT_TOL = 1e-3
 
 # DKT architecture & training
 DKT_EMB_DIM = 64
 DKT_HID_DIM = 128
 DKT_LR = 1e-3
-
-# FKT-lite (MTL) architecture & training
 MTL_HID_DIM = 128
 MTL_LR = 1e-3
 MTL_BATCH = 256
