@@ -8,6 +8,7 @@ import time
 
 from .. import config
 from ..utils import prepare_tabular_features
+from sklearn.model_selection import train_test_split
 
 
 def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[str, Any]:
@@ -67,9 +68,10 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     class MTL(nn.Module):
         def __init__(self, d_in: int, d_hid: int = 64):
             super().__init__()
+            p = float(getattr(config, "MTL_DROPOUT", 0.0))
             self.shared = nn.Sequential(
-                nn.Linear(d_in, d_hid), nn.ReLU(),
-                nn.Linear(d_hid, d_hid), nn.ReLU(),
+                nn.Linear(d_in, d_hid), nn.ReLU(), nn.Dropout(p=p),
+                nn.Linear(d_hid, d_hid), nn.ReLU(), nn.Dropout(p=p),
             )
             self.head_corr = nn.Sequential(nn.Linear(d_hid, 1))
             self.head_rt = nn.Sequential(nn.Linear(d_hid, 1))
@@ -82,24 +84,37 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     model = MTL(d_in=X_tr.shape[1], d_hid=getattr(config, "MTL_HID_DIM", 64)).to(device)
     bce = nn.BCEWithLogitsLoss()
     mse = nn.MSELoss(reduction="none")
-    opt = torch.optim.Adam(model.parameters(), lr=float(getattr(config, "MTL_LR", 1e-3)))
+    opt = torch.optim.Adam(
+        model.parameters(), lr=float(getattr(config, "MTL_LR", 1e-3)), weight_decay=float(getattr(config, "MTL_WEIGHT_DECAY", 0.0))
+    )
 
-    # Train (respect time budget)
+    # Train (respect time budget) with early stopping via inner validation split
     model.train()
     batch_size = int(getattr(config, "MTL_BATCH", 128))
     n = Xt.shape[0]
     start_time = time.perf_counter()
     budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
+    # Inner split indices
+    idx_all = np.arange(n)
+    if n >= 5:
+        tr_in, va_in = train_test_split(idx_all, test_size=0.2, random_state=config.RANDOM_STATE, stratify=(yt_corr.cpu().numpy().round() if float(yt_corr.numel()) else None))
+    else:
+        tr_in, va_in = idx_all, np.array([], dtype=int)
+    best_state = None
+    best_val = float("inf")
+    best_epoch = -1
+    patience = int(getattr(config, "MTL_PATIENCE", 0))
+    wait = 0
     for epoch in range(max(1, config.EPOCHS_MTL)):
         if budget is not None and (time.perf_counter() - start_time) > float(budget):
             break
-        perm = torch.randperm(n)
-        for i in range(0, n, batch_size):
-            idx = perm[i:i+batch_size]
-            xb = Xt[idx]
-            yb = yt_corr[idx]
-            rb = yt_rt[idx]
-            mb = mt_rt[idx]
+        perm = torch.randperm(len(tr_in))
+        for i in range(0, len(tr_in), batch_size):
+            idx_slice = tr_in[perm[i:i+batch_size].cpu().numpy()]
+            xb = Xt[idx_slice]
+            yb = yt_corr[idx_slice]
+            rb = yt_rt[idx_slice]
+            mb = mt_rt[idx_slice]
             logit, rt_pred = model(xb)
             loss_corr = bce(logit, yb)
             loss_rt = (mse(rt_pred, rb) * mb).sum() / (mb.sum() + 1e-6)
@@ -107,9 +122,34 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             opt.zero_grad()
             loss.backward()
             opt.step()
+        # Validation step
+        if va_in.size > 0:
+            model.eval()
+            with torch.no_grad():
+                xb = Xt[va_in]
+                yb = yt_corr[va_in]
+                rb = yt_rt[va_in]
+                mb = mt_rt[va_in]
+                logit, rt_pred = model(xb)
+                loss_corr = bce(logit, yb)
+                loss_rt = (mse(rt_pred, rb) * mb).sum() / (mb.sum() + 1e-6)
+                val_loss = float((loss_corr + 0.2 * loss_rt).item())
+            if val_loss < best_val - 1e-4:
+                best_val = val_loss
+                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                best_epoch = epoch
+                wait = 0
+            else:
+                wait += 1
+                if patience > 0 and wait >= patience:
+                    break
+            model.train()
 
     # Eval
     Xte_t = torch.tensor(X_te, dtype=torch.float32, device=device)
+    # Load best if available and evaluate
+    if best_state is not None:
+        model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
         logit, rt_pred = model(Xte_t)
@@ -133,4 +173,5 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "y_prob": y_prob,
         "aux_mae_rt": mae,
         "aux_rmse_rt": rmse,
+        "best_epoch": int(best_epoch) if best_epoch >= 0 else None,
     }

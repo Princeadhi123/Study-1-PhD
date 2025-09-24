@@ -7,6 +7,9 @@ import pandas as pd
 
 from .. import config
 from ..utils import prepare_tabular_features
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score, accuracy_score
+import time
 
 
 def _covariance(X: np.ndarray) -> np.ndarray:
@@ -108,9 +111,48 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     # CORAL align source to target
     Xs_aligned, params = _coral_align(Xs, Xt_unl)
 
-    # Train logistic on aligned source
+    # Train logistic on aligned source with lightweight C tuning
     from sklearn.linear_model import LogisticRegression
-    clf = LogisticRegression(max_iter=getattr(config, "ADAPT_MAX_ITER", 1000), class_weight="balanced", solver="lbfgs", random_state=config.RANDOM_STATE)
+    start_time = time.perf_counter()
+    budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
+    C_grid = getattr(config, "LOGREG_C_GRID", [1.0])
+    best_C = None
+    best_score = -np.inf
+    try:
+        tr_in, va_in = train_test_split(
+            np.arange(len(y_s)), test_size=0.2, random_state=config.RANDOM_STATE, stratify=y_s if len(np.unique(y_s)) > 1 else None
+        )
+        Xtr_in, Xva_in = Xs_aligned[tr_in], Xs_aligned[va_in]
+        ytr_in, yva_in = y_s[tr_in], y_s[va_in]
+        for C in C_grid:
+            if budget is not None and (time.perf_counter() - start_time) > float(budget):
+                break
+            clf_tmp = LogisticRegression(
+                C=float(C),
+                max_iter=getattr(config, "ADAPT_MAX_ITER", 1000),
+                class_weight="balanced",
+                solver="lbfgs",
+                random_state=config.RANDOM_STATE,
+            )
+            clf_tmp.fit(Xtr_in, ytr_in)
+            p_va = clf_tmp.predict_proba(Xva_in)[:, 1]
+            try:
+                score = roc_auc_score(yva_in, p_va)
+            except Exception:
+                score = accuracy_score(yva_in, (p_va >= 0.5).astype(int))
+            if score > best_score:
+                best_score = score
+                best_C = C
+    except Exception:
+        best_C = None
+
+    clf = LogisticRegression(
+        C=float(best_C) if best_C is not None else 1.0,
+        max_iter=getattr(config, "ADAPT_MAX_ITER", 1000),
+        class_weight="balanced",
+        solver="lbfgs",
+        random_state=config.RANDOM_STATE,
+    )
     clf.fit(Xs_aligned, y_s)
 
     # Evaluate on aligned target eval rows
@@ -129,4 +171,5 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "domain_source_groups": src_groups,
         "domain_target_groups": tgt_groups,
         "test_rows": tgt_rows_eval,
+        "chosen_C": float(best_C) if best_C is not None else 1.0,
     }

@@ -6,6 +6,9 @@ import numpy as np
 import pandas as pd
 
 from .. import config
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score, accuracy_score
+import time
 
 
 def _build_group_graph(train_df: pd.DataFrame) -> pd.DataFrame:
@@ -49,26 +52,85 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     train_df = df.iloc[train_idx].copy()
     test_df = df.iloc[test_idx].copy()
 
-    # Baseline group difficulty from train
-    grp_mean = train_df.groupby(config.COL_GROUP)[config.COL_RESP].apply(lambda s: pd.to_numeric(s, errors="coerce").mean())
-    global_mean = float(pd.to_numeric(train_df[config.COL_RESP], errors="coerce").mean()) if not train_df.empty else 0.5
+    # Helper to compute smoothed probs dict for a frame and alpha
+    def smooth_from_frame(frame: pd.DataFrame, alpha_val: float) -> tuple[Dict[str, float], float, pd.DataFrame]:
+        grp_mean_loc = frame.groupby(config.COL_GROUP)[config.COL_RESP].apply(lambda s: pd.to_numeric(s, errors="coerce").mean())
+        global_mean_loc = float(pd.to_numeric(frame[config.COL_RESP], errors="coerce").mean()) if not frame.empty else 0.5
+        adj_loc = _build_group_graph(frame)
+        sm: Dict[str, float] = {}
+        for g in grp_mean_loc.index.astype(str):
+            p_g = float(grp_mean_loc.get(g, global_mean_loc))
+            if not adj_loc.empty and g in adj_loc.index:
+                neigh = adj_loc.loc[g]
+                p_nei = 0.0
+                for h, w in neigh.items():
+                    if w > 0:
+                        p_nei += w * float(grp_mean_loc.get(h, global_mean_loc))
+                p_smooth = alpha_val * p_g + (1 - alpha_val) * p_nei
+            else:
+                p_smooth = p_g
+            sm[g] = float(np.clip(p_smooth, 1e-3, 1 - 1e-3))
+        return sm, global_mean_loc, adj_loc
 
-    # Build adjacency and compute neighbor-smoothed difficulty
-    adj = _build_group_graph(train_df)
-    smoothed: Dict[str, float] = {}
-    alpha = float(getattr(config, "GKT_SMOOTH_ALPHA", 0.7))  # weight for own group difficulty
-    for g in grp_mean.index.astype(str):
-        p_g = float(grp_mean.get(g, global_mean))
-        if not adj.empty and g in adj.index:
-            neigh = adj.loc[g]
-            p_nei = 0.0
-            for h, w in neigh.items():
-                if w > 0:
-                    p_nei += w * float(grp_mean.get(h, global_mean))
-            p_smooth = alpha * p_g + (1 - alpha) * p_nei
+    # Lightweight alpha tuning using an inner validation split by students
+    start_time = time.perf_counter()
+    budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
+    alpha_grid = getattr(config, "GKT_ALPHA_GRID", [getattr(config, "GKT_SMOOTH_ALPHA", 0.7)])
+
+    best_alpha = None
+    best_score = -np.inf
+
+    # Build inner split only if ID column exists and enough students
+    try:
+        if config.COL_ID in train_df.columns:
+            students = train_df[config.COL_ID].astype(str).unique()
+            if len(students) >= 3:
+                s_tr, s_va = train_test_split(students, test_size=0.2, random_state=config.RANDOM_STATE, shuffle=True)
+                inner_tr = train_df[train_df[config.COL_ID].astype(str).isin(s_tr)].copy()
+                inner_va = train_df[train_df[config.COL_ID].astype(str).isin(s_va)].copy()
+            else:
+                inner_tr, inner_va = train_df, pd.DataFrame(columns=train_df.columns)
         else:
-            p_smooth = p_g
-        smoothed[g] = float(np.clip(p_smooth, 1e-3, 1 - 1e-3))
+            inner_tr, inner_va = train_df, pd.DataFrame(columns=train_df.columns)
+
+        # Evaluate each alpha on validation
+        for a in alpha_grid:
+            if budget is not None and (time.perf_counter() - start_time) > float(budget):
+                break
+            sm_dict, global_mean_loc, _ = smooth_from_frame(inner_tr, float(a))
+            if not inner_va.empty:
+                g_series = inner_va[config.COL_GROUP].astype(str)
+                y_true_va = pd.to_numeric(inner_va[config.COL_RESP], errors="coerce")
+                mask = y_true_va.isin([0, 1]).values
+                if mask.any():
+                    y_true_v = y_true_va[mask].astype(int).values
+                    y_prob_v = np.array([sm_dict.get(g, global_mean_loc) for g in g_series[mask]], dtype=float)
+                    try:
+                        score = roc_auc_score(y_true_v, y_prob_v)
+                    except Exception:
+                        score = accuracy_score(y_true_v, (y_prob_v >= 0.5).astype(int))
+                else:
+                    score = -np.inf
+            else:
+                # No validation available, use training likelihood proxy: mean abs error vs grp_mean
+                g_series = inner_tr[config.COL_GROUP].astype(str)
+                y_true_tr = pd.to_numeric(inner_tr[config.COL_RESP], errors="coerce")
+                mask = y_true_tr.isin([0, 1]).values
+                y_true_v = y_true_tr[mask].astype(int).values
+                y_prob_v = np.array([sm_dict.get(g, global_mean_loc) for g in g_series[mask]], dtype=float)
+                score = -float(np.mean(np.abs(y_true_v - y_prob_v))) if y_true_v.size else -np.inf
+            if score > best_score:
+                best_score = score
+                best_alpha = float(a)
+    except Exception:
+        best_alpha = float(getattr(config, "GKT_SMOOTH_ALPHA", 0.7))
+
+    # Fall back if tuning failed
+    if best_alpha is None:
+        best_alpha = float(getattr(config, "GKT_SMOOTH_ALPHA", 0.7))
+
+    # Compute final smoothed dict on full train with best alpha
+    smoothed, global_mean, _ = smooth_from_frame(train_df, best_alpha)
 
     # Predict for test rows by group lookup
     g_series = test_df[config.COL_GROUP].astype(str) if config.COL_GROUP in test_df.columns else pd.Series([], dtype=str)
@@ -84,4 +146,5 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "why": why,
         "y_true": y_true,
         "y_prob": y_prob,
+        "chosen_alpha": float(best_alpha),
     }

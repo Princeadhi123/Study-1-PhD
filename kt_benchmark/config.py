@@ -2,7 +2,7 @@ from pathlib import Path
 
 # Paths
 BASE_DIR = Path(r"c:/Users/pdaadh/Desktop/Study 2")
-INPUT_CSV = BASE_DIR / "assistments_09_10_itemwise.csv"
+INPUT_CSV = BASE_DIR / "DigiArvi_25_itemwise.csv"
 OUTPUT_DIR = BASE_DIR / "kt_benchmark" / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -30,7 +30,6 @@ EPOCHS_MTL = 20          # FKT-lite epochs
 EPOCHS_CLKT = 10         # If used by any CLKT fine-tuning variants
 
 # Fairness: per-model wall-clock budget (seconds). Models with iterative loops
-# will respect this budget and stop early once exceeded. Non-iterative models
 # (e.g., scikit-learn solvers) may ignore it but typically finish under budget.
 TRAIN_TIME_BUDGET_S = 120
 
@@ -42,6 +41,7 @@ RASCH_INNER_ITER = 5
 BKT_GRID_L0 = [0.05, 0.10, 0.15, 0.20, 0.30, 0.40]
 BKT_GRID_T  = [0.05, 0.10, 0.15, 0.20, 0.30]
 BKT_GRID_G  = [0.05, 0.10, 0.15, 0.20, 0.25]
+BKT_GRID_S  = [0.05, 0.10, 0.15, 0.20, 0.25]
 # Graph smoothing
 GKT_SMOOTH_ALPHA = 0.7
 
@@ -74,3 +74,26 @@ CLKT_PRE_BATCH = 512
 
 # Logging
 VERBOSE = True
+
+# ---------------------------------------------------------------------------
+# New: Lightweight tuning/regularization controls to improve model performance
+# while respecting the global TRAIN_TIME_BUDGET_S.
+# ---------------------------------------------------------------------------
+
+# Logistic/TIRT C grids
+LOGREG_C_GRID = [0.01, 0.1, 1.0, 10.0]
+TIRT_C_GRID   = [0.01, 0.1, 1.0, 10.0]
+
+# GKT smoothing alpha grid (will pick best on a small validation split of train)
+GKT_ALPHA_GRID = [0.5, 0.6, 0.7, 0.8, 0.9]
+
+# DKT training controls
+DKT_BATCH = 64
+DKT_DROPOUT = 0.2
+DKT_WEIGHT_DECAY = 1e-4
+DKT_PATIENCE = 3
+
+# MTL training controls
+MTL_DROPOUT = 0.2
+MTL_WEIGHT_DECAY = 1e-4
+MTL_PATIENCE = 3

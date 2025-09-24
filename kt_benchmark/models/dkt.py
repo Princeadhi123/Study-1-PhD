@@ -139,6 +139,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             super().__init__()
             self.emb = nn.Embedding(vocab, emb, padding_idx=pad_idx)
             self.lstm = nn.LSTM(emb, hid, batch_first=True)
+            self.drop = nn.Dropout(p=float(getattr(config, "DKT_DROPOUT", 0.0)))
             self.out = nn.Linear(hid, 1)
         def forward(self, it, lengths):
             x = self.emb(it)
@@ -146,15 +147,46 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             packed = torch.nn.utils.rnn.pack_padded_sequence(x, lengths.cpu(), batch_first=True, enforce_sorted=False)
             h, _ = self.lstm(packed)
             h, _ = torch.nn.utils.rnn.pad_packed_sequence(h, batch_first=True)
+            h = self.drop(h)
             logits = self.out(h).squeeze(-1)
             return logits
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = DKT(vocab=vocab_size, emb=getattr(config, "DKT_EMB_DIM", 32), hid=getattr(config, "DKT_HID_DIM", 64)).to(device)
     crit = nn.BCEWithLogitsLoss(reduction="none")
-    opt = torch.optim.Adam(model.parameters(), lr=float(getattr(config, "DKT_LR", 1e-3)))
+    opt = torch.optim.Adam(
+        model.parameters(), lr=float(getattr(config, "DKT_LR", 1e-3)), weight_decay=float(getattr(config, "DKT_WEIGHT_DECAY", 0.0))
+    )
 
-    # Train (respect time budget)
+    # Prepare inner validation split over training students (for early stopping)
+    best_state = None
+    best_val = float("inf")
+    best_epoch = -1
+    patience = int(getattr(config, "DKT_PATIENCE", 0))
+    wait = 0
+
+    students_with_seq = sorted({sid for sid, _ in [(s, None) for s in train_students]})
+    # Filter to students that actually have sequences
+    def has_seq(sid: str) -> bool:
+        sub = df_seq.loc[df_seq[config.COL_ID] == sid]
+        if sub.empty:
+            return False
+        y_series = pd.to_numeric(sub[config.COL_RESP], errors="coerce")
+        return y_series.isin([0, 1]).sum() >= 1
+    students_with_seq = [s for s in students_with_seq if has_seq(s)]
+    if len(students_with_seq) >= 3:
+        s_tr_in, s_va_in = train_test_split(students_with_seq, test_size=0.2, random_state=config.RANDOM_STATE, shuffle=True)
+        train_seqs_in = build_sequences(sorted(s_tr_in))
+        val_seqs = build_sequences(sorted(s_va_in))
+    else:
+        train_seqs_in = train_seqs
+        val_seqs = []
+
+    train_loader = DataLoader(SeqDataset(train_seqs_in), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=True, collate_fn=collate)
+    val_loader = DataLoader(SeqDataset(val_seqs), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=False, collate_fn=collate) if val_seqs else None
+    test_loader = DataLoader(SeqDataset(test_seqs), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=False, collate_fn=collate)
+
+    # Train (respect time budget) with early stopping on validation loss if available
     model.train()
     start_time = time.perf_counter()
     budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
@@ -173,6 +205,37 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             opt.zero_grad()
             loss.backward()
             opt.step()
+        # Validation
+        if val_loader is not None:
+            model.eval()
+            with torch.no_grad():
+                val_losses = []
+                for it_pad, y_pad, lengths in val_loader:
+                    it_pad = it_pad.to(device)
+                    y_pad = y_pad.to(device)
+                    lengths = lengths.to(device)
+                    logits = model(it_pad, lengths)
+                    y_float = (y_pad == 1).float()
+                    mask = (y_pad != -1).float()
+                    l = crit(logits, y_float)
+                    l = (l * mask).sum() / (mask.sum() + 1e-6)
+                    val_losses.append(l.item())
+                val_loss = float(np.mean(val_losses)) if val_losses else float("inf")
+            # Early stopping check
+            if val_loss < best_val - 1e-4:
+                best_val = val_loss
+                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                best_epoch = epoch
+                wait = 0
+            else:
+                wait += 1
+                if patience > 0 and wait >= patience:
+                    break
+            model.train()
+
+    # Load best model if we have one
+    if best_state is not None:
+        model.load_state_dict(best_state)
 
     # Evaluate: collect all per-step predictions with valid labels
     model.eval()
@@ -208,4 +271,5 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "y_true": np.array(y_true_all),
         "y_prob": np.array(y_prob_all),
         **diag,
+        "best_epoch": int(best_epoch) if best_epoch >= 0 else None,
     }
