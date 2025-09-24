@@ -2,7 +2,7 @@ from pathlib import Path
 
 # Paths
 BASE_DIR = Path(r"c:/Users/pdaadh/Desktop/Study 2")
-INPUT_CSV = BASE_DIR / "EQTd_DAi_25_itemwise.csv"
+INPUT_CSV = BASE_DIR / "assistments_09_10_itemwise.csv"
 OUTPUT_DIR = BASE_DIR / "kt_benchmark" / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -57,7 +57,6 @@ ADAPT_MAX_ITER  = 5000   # AdaptKT-lite classifier
 DKT_EMB_DIM = 64
 DKT_HID_DIM = 128
 DKT_LR = 1e-3
-DKT_BATCH = 64
 
 # FKT-lite (MTL) architecture & training
 MTL_HID_DIM = 128
