@@ -7,7 +7,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
 from .. import config
-from ..utils import prepare_tabular_features_sparse
+from ..utils import prepare_tabular_features_sparse_split
 
 
 def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[str, Any]:
@@ -19,8 +19,10 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         return {"category": "Temporal/Sequential", "name": "TIRT-lite", "why": why, "error": "response column missing"}
 
     # Features: item, time_index_z and group (when present) in a sparse matrix.
-    X_sparse, _ = prepare_tabular_features_sparse(
+    X_tr, X_te, _ = prepare_tabular_features_sparse_split(
         df,
+        train_idx=train_idx,
+        test_idx=test_idx,
         use_item=True,
         use_group=getattr(config, "LINEAR_USE_GROUP", True),
         use_sex=False,
@@ -34,8 +36,9 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     if tr.size == 0 or te.size == 0:
         return {"category": "Temporal/Sequential", "name": "TIRT-lite", "why": why, "error": "no valid train/test rows"}
 
-    X_tr = X_sparse[tr]
-    X_te = X_sparse[te]
+    # Align with valid mask selections
+    X_tr = X_tr[np.searchsorted(train_idx, tr)]
+    X_te = X_te[np.searchsorted(test_idx, te)]
     y_tr = y.iloc[tr].astype(int).values
     y_te = y.iloc[te].astype(int).values
 

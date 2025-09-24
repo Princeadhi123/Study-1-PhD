@@ -273,3 +273,101 @@ def student_group_sequences(df: pd.DataFrame) -> Dict[Tuple[str, str], pd.DataFr
     if config.COL_ID not in df.columns or config.COL_GROUP not in df.columns:
         return {}
     return sequences_by(df, [config.COL_ID, config.COL_GROUP])
+
+
+# Train-aware sparse feature builder to eliminate leakage
+
+def _ohe_fit_split(train_vals: pd.Series, test_vals: pd.Series, feature_name: str):
+    # scikit-learn >= 1.2 uses 'sparse_output'
+    try:
+        enc = OneHotEncoder(handle_unknown="ignore", sparse_output=True, dtype=np.float32)
+    except TypeError:
+        enc = OneHotEncoder(handle_unknown="ignore", sparse=True, dtype=np.float32)
+    Xtr = enc.fit_transform(train_vals.astype(str).to_frame())
+    Xte = enc.transform(test_vals.astype(str).to_frame())
+    try:
+        names = enc.get_feature_names_out([feature_name]).tolist()
+    except AttributeError:
+        names = enc.get_feature_names([feature_name]).tolist()
+    if _SP_AVAILABLE:
+        return Xtr.tocsr(), Xte.tocsr(), names
+    else:
+        return Xtr.toarray(), Xte.toarray(), names
+
+
+def prepare_tabular_features_sparse_split(
+    df: pd.DataFrame,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    use_item: bool = True,
+    use_group: bool = True,
+    use_sex: bool = True,
+    use_time: bool = True,
+) -> tuple[object, object, List[str]]:
+    parts_tr: List[object] = []
+    parts_te: List[object] = []
+    names: List[str] = []
+
+    # Helpers to slice
+    def tr(series: pd.Series) -> pd.Series:
+        return series.iloc[train_idx]
+    def te(series: pd.Series) -> pd.Series:
+        return series.iloc[test_idx]
+
+    # Categorical parts: fit on train, transform both
+    if use_item:
+        if config.COL_ITEM in df.columns:
+            Xtr, Xte, nm = _ohe_fit_split(tr(df[config.COL_ITEM]), te(df[config.COL_ITEM]), config.COL_ITEM)
+            parts_tr.append(Xtr); parts_te.append(Xte); names.extend(nm)
+        elif config.COL_ITEM_INDEX in df.columns:
+            Xtr, Xte, nm = _ohe_fit_split(tr(df[config.COL_ITEM_INDEX].astype(str)), te(df[config.COL_ITEM_INDEX].astype(str)), config.COL_ITEM_INDEX)
+            parts_tr.append(Xtr); parts_te.append(Xte); names.extend(nm)
+
+    if use_group and config.COL_GROUP in df.columns:
+        Xtr, Xte, nm = _ohe_fit_split(tr(df[config.COL_GROUP]), te(df[config.COL_GROUP]), config.COL_GROUP)
+        parts_tr.append(Xtr); parts_te.append(Xte); names.extend(nm)
+
+    if use_sex and config.COL_SEX in df.columns:
+        Xtr, Xte, nm = _ohe_fit_split(tr(df[config.COL_SEX]), te(df[config.COL_SEX]), config.COL_SEX)
+        parts_tr.append(Xtr); parts_te.append(Xte); names.extend(nm)
+
+    # Continuous parts: compute stats on train only
+    if use_time and "time_index" in df.columns:
+        ti_tr = tr(df["time_index"]).astype(float)
+        mu = ti_tr.mean(); sd = ti_tr.std(ddof=1) + 1e-9
+        ti_te = te(df["time_index"]).astype(float)
+        vtr = ((ti_tr - mu) / sd).to_numpy(dtype=np.float32).reshape(-1, 1)
+        vte = ((ti_te - mu) / sd).to_numpy(dtype=np.float32).reshape(-1, 1)
+        Xtr = (_sp.csr_matrix(vtr) if _SP_AVAILABLE else vtr)
+        Xte = (_sp.csr_matrix(vte) if _SP_AVAILABLE else vte)
+        parts_tr.append(Xtr); parts_te.append(Xte); names.append("time_index_z")
+
+    if config.COL_RT in df.columns:
+        rtr = pd.to_numeric(tr(df[config.COL_RT]), errors="coerce").clip(lower=0)
+        med = rtr[rtr >= 0].median()
+        rtr = rtr.fillna(0 if np.isnan(med) else med)
+        rte = pd.to_numeric(te(df[config.COL_RT]), errors="coerce").clip(lower=0)
+        rte = rte.fillna(0 if np.isnan(med) else med)
+        vtr = np.log1p(rtr).to_numpy(dtype=np.float32).reshape(-1, 1)
+        vte = np.log1p(rte).to_numpy(dtype=np.float32).reshape(-1, 1)
+        Xtr = (_sp.csr_matrix(vtr) if _SP_AVAILABLE else vtr)
+        Xte = (_sp.csr_matrix(vte) if _SP_AVAILABLE else vte)
+        parts_tr.append(Xtr); parts_te.append(Xte); names.append("log_rt")
+
+    if not parts_tr:
+        if _SP_AVAILABLE:
+            Ztr = _sp.csr_matrix((len(train_idx), 0), dtype=np.float32)
+            Zte = _sp.csr_matrix((len(test_idx), 0), dtype=np.float32)
+        else:
+            Ztr = np.zeros((len(train_idx), 0), dtype=np.float32)
+            Zte = np.zeros((len(test_idx), 0), dtype=np.float32)
+        return Ztr, Zte, []
+
+    if _SP_AVAILABLE:
+        X_tr = _sp.hstack(parts_tr, format="csr")
+        X_te = _sp.hstack(parts_te, format="csr")
+    else:
+        X_tr = np.concatenate([p if isinstance(p, np.ndarray) else p.toarray() for p in parts_tr], axis=1).astype(np.float32, copy=False)
+        X_te = np.concatenate([p if isinstance(p, np.ndarray) else p.toarray() for p in parts_te], axis=1).astype(np.float32, copy=False)
+
+    return X_tr, X_te, names
