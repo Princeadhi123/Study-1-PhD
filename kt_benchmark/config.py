@@ -30,7 +30,6 @@ EPOCHS_MTL = 20          # FKT-lite epochs
 EPOCHS_CLKT = 10         # If used by any CLKT fine-tuning variants
 
 # Fairness: per-model wall-clock budget (seconds). Models with iterative loops
-# will respect this budget and stop early once exceeded. Non-iterative models
 # (e.g., scikit-learn solvers) may ignore it but typically finish under budget.
 TRAIN_TIME_BUDGET_S = 120
 
@@ -43,22 +42,26 @@ BKT_GRID_L0 = [0.05, 0.10, 0.15, 0.20, 0.30, 0.40]
 BKT_GRID_T  = [0.05, 0.10, 0.15, 0.20, 0.30]
 BKT_GRID_G  = [0.05, 0.10, 0.15, 0.20, 0.25]
 BKT_GRID_S  = [0.05, 0.10, 0.15, 0.20, 0.25]
-
 # Graph smoothing
 GKT_SMOOTH_ALPHA = 0.7
 
 # Logistic Regression max iterations
-LOGREG_MAX_ITER = 5000   # plain LogisticRegression
-TIRT_MAX_ITER   = 5000   # TIRT-lite's logistic head
+LOGREG_MAX_ITER = 500   # plain LogisticRegression
+TIRT_MAX_ITER   = 500   # TIRT-lite's logistic head
 CLKT_SUP_MAX_ITER = 5000 # supervised LR after contrastive pretraining
 ADAPT_MAX_ITER  = 5000   # AdaptKT-lite classifier
+
+# Linear model feature toggles and solver tolerances
+# If Assistments runs are slow due to very high KC/skill cardinality, you can
+# set LINEAR_USE_GROUP = False to drop group one-hots for linear baselines.
+LINEAR_USE_GROUP = True
+LOGREG_TOL = 1e-3
+TIRT_TOL = 1e-3
 
 # DKT architecture & training
 DKT_EMB_DIM = 64
 DKT_HID_DIM = 128
 DKT_LR = 1e-3
-
-# FKT-lite (MTL) architecture & training
 MTL_HID_DIM = 128
 MTL_LR = 1e-3
 MTL_BATCH = 256
@@ -71,3 +74,26 @@ CLKT_PRE_BATCH = 512
 
 # Logging
 VERBOSE = True
+
+# ---------------------------------------------------------------------------
+# New: Lightweight tuning/regularization controls to improve model performance
+# while respecting the global TRAIN_TIME_BUDGET_S.
+# ---------------------------------------------------------------------------
+
+# Logistic/TIRT C grids
+LOGREG_C_GRID = [0.01, 0.1, 1.0, 10.0]
+TIRT_C_GRID   = [0.01, 0.1, 1.0, 10.0]
+
+# GKT smoothing alpha grid (will pick best on a small validation split of train)
+GKT_ALPHA_GRID = [0.5, 0.6, 0.7, 0.8, 0.9]
+
+# DKT training controls
+DKT_BATCH = 64
+DKT_DROPOUT = 0.2
+DKT_WEIGHT_DECAY = 1e-4
+DKT_PATIENCE = 3
+
+# MTL training controls
+MTL_DROPOUT = 0.2
+MTL_WEIGHT_DECAY = 1e-4
+MTL_PATIENCE = 3
