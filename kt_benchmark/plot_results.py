@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.colors import ListedColormap
 import matplotlib.patches as mpatches
+import matplotlib.patheffects as patheffects
 from sklearn.metrics import (
     roc_curve,
     roc_auc_score,
@@ -190,14 +191,14 @@ def plot_student_trajectories_all_models(
     else:
         ordered_models = [row["model"] for _, row in metrics.iterrows() if row["model"] in model_preds]
         model_list = ordered_models[:max_models] if ordered_models else list(model_preds.keys())[:max_models]
-    # Colorblind-friendly palette and line styles
-    colors = sns.color_palette("Set2", n_colors=max(len(model_list), 3))
-    linestyles = ["solid", "dashed", "dotted", "dashdot"]
+    # Highly distinct colors across hues (one unique hue per model)
+    colors = sns.color_palette("husl", n_colors=len(model_list) if len(model_list) > 0 else 8)
+    linestyles = ["solid"]  # keep all lines solid for easier tracing
     color_by_model = {mdl: colors[i % len(colors)] for i, mdl in enumerate(model_list)}
     style_by_model = {mdl: linestyles[i % len(linestyles)] for i, mdl in enumerate(model_list)}
 
     n = len(top_students)
-    fig, axes = plt.subplots(nrows=n, ncols=1, figsize=(10, 2.6 * n), sharex=False)
+    fig, axes = plt.subplots(nrows=n, ncols=1, figsize=(12, 2.7 * n), sharex=False)
     if n == 1:
         axes = [axes]
 
@@ -210,7 +211,7 @@ def plot_student_trajectories_all_models(
         gt = y_true_all[m].astype(int).to_numpy()
         ax.scatter(ord_true, gt, s=35, c="black", edgecolors="white", linewidths=0.6, zorder=4, label="Ground truth")
 
-        # Model prediction lines (thin, semi-transparent)
+        # Model prediction lines (thicker, higher-contrast)
         for mdl in model_list:
             data = model_preds[mdl]
             mask_sid = id_map.loc[data["rows"]].astype(str).values == sid
@@ -225,24 +226,34 @@ def plot_student_trajectories_all_models(
                 ord_sid,
                 yp,
                 color=color_by_model[mdl],
-                lw=1.5,
-                alpha=0.7,
+                lw=2.2,
+                alpha=0.9,
                 linestyle=style_by_model[mdl],
+                path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
                 label=mdl,
             )
         ax.set_ylim(0, 1)
         ax.set_ylabel("p(correct)")
         ax.set_title(f"Student {sid}")
         ax.grid(True, alpha=0.25)
+        ax.margins(x=0.02)
     axes[-1].set_xlabel("Interaction order")
-    # Shared legend below
+    # Shared legend below the plots (outside) with many columns and strong color separation
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="lower center", ncol=min(3, len(labels)), fontsize=9)
-        fig.tight_layout(rect=[0, 0.07, 1, 0.97])
+        fig.legend(
+            handles,
+            labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.04),
+            ncol=min(8, len(labels)),
+            fontsize=9,
+            frameon=True,
+        )
+        fig.tight_layout(rect=[0, 0.05, 1, 0.93])
     else:
-        fig.tight_layout(rect=[0, 0, 1, 0.97])
-    fig.suptitle("Example Student Trajectories", y=0.995)
+        fig.tight_layout(rect=[0, 0.05, 1, 0.93])
+    fig.suptitle("Example Student Trajectories", y=0.985)
     fig.savefig(outdir / "trajectories_all_models.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "trajectories_all_models.pdf", bbox_inches="tight")
     plt.close(fig)
