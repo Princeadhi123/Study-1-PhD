@@ -44,8 +44,8 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     df_seq[config.COL_ID] = df_seq[config.COL_ID].astype(str)
     df_seq = df_seq.sort_values([config.COL_ID, config.COL_ORDER])
 
-    def build_sequences(student_ids: List[str]) -> List[Tuple[np.ndarray, np.ndarray]]:
-        seqs: List[Tuple[np.ndarray, np.ndarray]] = []
+    def build_sequences(student_ids: List[str]) -> List[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        seqs: List[Tuple[np.ndarray, np.ndarray, np.ndarray]] = []
         for sid in student_ids:
             sub = df_seq.loc[df_seq[config.COL_ID] == sid]
             if sub.empty:
@@ -57,9 +57,10 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
                 continue
             items = items_all[mask]
             y = y_series[mask].astype(int).values
+            rows = sub.index.values[mask]
             # Keep sequences with at least 1 labeled step (DKT can handle length-1)
             if len(y) >= 1:  # be permissive to avoid empty splits
-                seqs.append((items, y))
+                seqs.append((items, y, rows))
         return seqs
 
     train_seqs = build_sequences(sorted(train_students))
@@ -120,16 +121,24 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             return self.seqs[idx]
 
     def collate(batch):
-        # batch: list of (items, y)
+        # batch: list of (items, y, rows) where rows may be absent in legacy tuples
         lengths = [len(x[0]) for x in batch]
         max_len = max(lengths)
         it_pad = torch.full((len(batch), max_len), pad_idx, dtype=torch.long)
         y_pad = torch.full((len(batch), max_len), -1, dtype=torch.long)  # -1 to mask loss
-        for i, (it, y) in enumerate(batch):
+        r_pad = torch.full((len(batch), max_len), -1, dtype=torch.long)
+        for i, elem in enumerate(batch):
+            if len(elem) == 3:
+                it, y, rows = elem
+            else:
+                it, y = elem
+                rows = None
             L = len(it)
             it_pad[i, :L] = torch.tensor(it, dtype=torch.long)
             y_pad[i, :L] = torch.tensor(y, dtype=torch.long)
-        return it_pad, y_pad, torch.tensor(lengths, dtype=torch.long)
+            if rows is not None:
+                r_pad[i, :L] = torch.tensor(rows, dtype=torch.long)
+        return it_pad, y_pad, r_pad, torch.tensor(lengths, dtype=torch.long)
 
     train_loader = DataLoader(SeqDataset(train_seqs), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=True, collate_fn=collate)
     test_loader = DataLoader(SeqDataset(test_seqs), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=False, collate_fn=collate)
@@ -193,7 +202,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     for epoch in range(max(1, config.EPOCHS_DKT)):
         if budget is not None and (time.perf_counter() - start_time) > float(budget):
             break
-        for it_pad, y_pad, lengths in train_loader:
+        for it_pad, y_pad, r_pad, lengths in train_loader:
             it_pad = it_pad.to(device)
             y_pad = y_pad.to(device)
             lengths = lengths.to(device)
@@ -210,7 +219,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             model.eval()
             with torch.no_grad():
                 val_losses = []
-                for it_pad, y_pad, lengths in val_loader:
+                for it_pad, y_pad, r_pad, lengths in val_loader:
                     it_pad = it_pad.to(device)
                     y_pad = y_pad.to(device)
                     lengths = lengths.to(device)
@@ -241,19 +250,23 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     model.eval()
     y_true_all: List[int] = []
     y_prob_all: List[float] = []
+    row_idx_all: List[int] = []
     with torch.no_grad():
-        for it_pad, y_pad, lengths in test_loader:
+        for it_pad, y_pad, r_pad, lengths in test_loader:
             it_pad = it_pad.to(device)
             y_pad = y_pad.to(device)
+            r_pad = r_pad.to(device)
             lengths = lengths.to(device)
             logits = model(it_pad, lengths)
             probs = torch.sigmoid(logits)
             mask = (y_pad != -1)
             y_true = (y_pad[mask]).float().cpu().numpy()
             y_prob = (probs[mask]).float().cpu().numpy()
+            r_vals = (r_pad[mask]).long().cpu().numpy()
             if y_true.size:
                 y_true_all.extend(y_true.tolist())
                 y_prob_all.extend(y_prob.tolist())
+                row_idx_all.extend(r_vals.tolist())
 
     if not y_true_all:
         return {
@@ -270,6 +283,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "why": why,
         "y_true": np.array(y_true_all),
         "y_prob": np.array(y_prob_all),
+        "test_rows": np.array(row_idx_all, dtype=int),
         **diag,
         "best_epoch": int(best_epoch) if best_epoch >= 0 else None,
     }

@@ -129,6 +129,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
 
     y_true_list: List[int] = []
     y_prob_list: List[float] = []
+    row_idx_list: List[int] = []
 
     for (sid, g), sub in test_df.groupby([config.COL_ID, config.COL_GROUP], dropna=False):
         y = pd.to_numeric(sub[config.COL_RESP], errors="coerce")
@@ -143,6 +144,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         probs = _predict_sequence_probs(y.values, params)
         y_true_list.extend(y.values.tolist())
         y_prob_list.extend(probs.tolist())
+        row_idx_list.extend(sub.index[mask].tolist())
 
     if not y_true_list:
         return {"category": "Bayesian", "name": "BKT", "why": why, "error": "No valid test sequences"}
@@ -153,4 +155,5 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "why": why,
         "y_true": np.array(y_true_list),
         "y_prob": np.array(y_prob_list),
+        "test_rows": np.array(row_idx_list, dtype=int),
     }

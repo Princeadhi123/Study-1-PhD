@@ -160,14 +160,19 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     try:
         model = Rasch1PL(max_iter=getattr(config, "RASCH_MAX_ITER", 30), inner_iter=getattr(config, "RASCH_INNER_ITER", 3))
         model.fit(df, train_idx)
-        y_true = pd.to_numeric(df.iloc[test_idx][config.COL_RESP], errors="coerce").values
-        y_prob = model.predict_proba(df, test_idx)
+        # Use only valid binary responses and keep their original row indices
+        y_all = pd.to_numeric(df.iloc[test_idx][config.COL_RESP], errors="coerce")
+        mask = y_all.isin([0, 1])
+        te_rows = np.array(df.iloc[test_idx].index[mask], dtype=int)
+        y_true = y_all[mask].astype(int).values
+        y_prob = model.predict_proba(df, te_rows)
         return {
             "category": "Psychometric (IRT)",
             "name": "Rasch1PL",
             "why": why,
             "y_true": y_true,
             "y_prob": y_prob,
+            "test_rows": te_rows,
         }
     except Exception as e:
         return {

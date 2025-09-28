@@ -171,6 +171,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "why": why,
         "y_true": y_te_corr,
         "y_prob": y_prob,
+        "test_rows": te,
         "aux_mae_rt": mae,
         "aux_rmse_rt": rmse,
         "best_epoch": int(best_epoch) if best_epoch >= 0 else None,

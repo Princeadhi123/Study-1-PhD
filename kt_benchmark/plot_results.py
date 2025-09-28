@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
@@ -25,11 +25,25 @@ from sklearn.metrics import (
 from sklearn.calibration import calibration_curve
 
 from . import config
+from .utils import load_itemwise_df, add_time_index
 
 
 def name_to_tag(name: str) -> str:
     # mimic run_benchmark.py tagging
     return name.lower().replace(" ", "_").replace("/", "-")
+
+
+def _sanitize_model_name(name: str) -> str:
+    """Mirror the name normalization in run_benchmark._sanitize_model_name so
+    plots can find the correct preds files regardless of '(minimal)', '(CORAL)', or 'lite' suffixes.
+    """
+    import re
+    s = name
+    s = re.sub(r"\s*\((?:minimal|coral)\)", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\blite\b", "", s, flags=re.IGNORECASE)
+    s = re.sub(r"\s+", " ", s)
+    s = s.strip().strip("-_ ")
+    return s
 
 
 def _ensure_plot_dirs(base: Path) -> Dict[str, Path]:
@@ -66,6 +80,288 @@ def _load_predictions(outdir: Path, model_name: str) -> Tuple[np.ndarray, np.nda
     y_prob = pd.to_numeric(df["y_prob"], errors="coerce").to_numpy()
     mask = np.isfinite(y_true) & np.isfinite(y_prob)
     return y_true[mask].astype(int), y_prob[mask].astype(float)
+
+
+def _load_predictions_with_index(outdir: Path, model_name: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load predictions and optional original row indices if present."""
+    tag = name_to_tag(model_name)
+    p = outdir / f"preds_{tag}.csv"
+    if not p.exists():
+        candidates = list(outdir.glob(f"preds_{tag}*.csv"))
+        if not candidates:
+            raise FileNotFoundError(f"No prediction file for model '{model_name}' (expected {p})")
+        p = candidates[0]
+    df = pd.read_csv(p)
+    y_true = pd.to_numeric(df.get("y_true"), errors="coerce").to_numpy()
+    y_prob = pd.to_numeric(df.get("y_prob"), errors="coerce").to_numpy()
+    idx = pd.to_numeric(df.get("df_row_index"), errors="coerce").to_numpy() if "df_row_index" in df.columns else None
+    mask = np.isfinite(y_true) & np.isfinite(y_prob)
+    if idx is not None:
+        mask = mask & np.isfinite(idx)
+        return y_true[mask].astype(int), y_prob[mask].astype(float), idx[mask].astype(int)
+    else:
+        return y_true[mask].astype(int), y_prob[mask].astype(float), np.array([], dtype=int)
+
+
+def _collect_model_predictions_with_dfrows(metrics: pd.DataFrame) -> Dict[str, Dict[str, np.ndarray]]:
+    """Return {model: {y_true, y_prob, rows}} only for models that have row indices stored."""
+    out = {}
+    for _, row in metrics.iterrows():
+        name = row["model"]
+        try:
+            yt, yp, idx = _load_predictions_with_index(config.OUTPUT_DIR, name)
+            if idx.size > 0:
+                out[name] = {"y_true": yt, "y_prob": yp, "rows": idx}
+        except Exception:
+            continue
+    return out
+
+
+def plot_student_trajectories_all_models(
+    metrics: pd.DataFrame,
+    outdir: Path,
+    max_students: int = 2,
+    min_len: int = 30,
+    max_len: int = 60,
+    max_models: int = 2,
+    models: Optional[List[str]] = None,
+):
+    """
+    For the current dataset, pick up to max_students students and plot trajectories of
+    predicted probabilities over time for ALL models in one figure (dataset-wise).
+    Correct vs. incorrect points highlighted by marker face color (green=correct, red=wrong) per model.
+    """
+    df = add_time_index(load_itemwise_df())
+    if config.COL_ID not in df.columns or config.COL_ORDER not in df.columns:
+        return
+    model_preds = _collect_model_predictions_with_dfrows(metrics)
+    if not model_preds:
+        return
+    # Map df row index -> (student, order)
+    id_map = df[config.COL_ID].astype(str)
+    order_map = df[config.COL_ORDER]
+
+    # Candidate students: limit by interaction counts in dataset
+    sizes = df.groupby(df[config.COL_ID].astype(str))[config.COL_ID].size()
+    allowed = set(sizes[(sizes >= min_len) & (sizes <= max_len)].index.astype(str).tolist())
+
+    # If user provided explicit models, prefer students present in ALL of them
+    intersection_students: Optional[set] = None
+    if models:
+        models_norm = [_sanitize_model_name(m) for m in models]
+        present_sets = []
+        for mdl in models_norm:
+            if mdl in model_preds:
+                sids = set(id_map.loc[model_preds[mdl]["rows"]].astype(str))
+                present_sets.append(sids)
+        if present_sets:
+            inter_full = set.intersection(*present_sets)
+            inter_allowed = inter_full.intersection(allowed)
+            intersection_students = inter_allowed if inter_allowed else inter_full
+
+    # Score by overlap coverage across models
+    sid_counts: Dict[str, int] = {}
+    for m in model_preds.values():
+        sids = id_map.loc[m["rows"]].astype(str)
+        for s in sids:
+            if s in allowed:
+                sid_counts[s] = sid_counts.get(s, 0) + 1
+
+    if intersection_students:
+        # Choose from intersection first, sorted by coverage (desc)
+        top_students = [s for s, _ in sorted(((s, sid_counts.get(s, 0)) for s in intersection_students), key=lambda x: -x[1])][:max_students]
+        # If intersection too small, pad with top by coverage
+        if len(top_students) < max_students:
+            remainder = [s for s, _ in sorted(sid_counts.items(), key=lambda x: -x[1]) if s not in top_students]
+            top_students += remainder[: (max_students - len(top_students))]
+    else:
+        top_students = [s for s, _ in sorted(sid_counts.items(), key=lambda x: -x[1])][:max_students]
+    if not top_students:
+        return
+
+    # Choose models: explicit list from caller/config if provided, else top by metric order
+    if models:
+        # Normalize provided names to match saved/sanitized keys and include ALL provided
+        models_norm = [_sanitize_model_name(m) for m in models]
+        model_list = [m for m in models_norm if m in model_preds]
+        if not model_list:
+            ordered_models = [row["model"] for _, row in metrics.iterrows() if row["model"] in model_preds]
+            model_list = ordered_models if ordered_models else list(model_preds.keys())
+    else:
+        ordered_models = [row["model"] for _, row in metrics.iterrows() if row["model"] in model_preds]
+        model_list = ordered_models[:max_models] if ordered_models else list(model_preds.keys())[:max_models]
+    # Colorblind-friendly palette and line styles
+    colors = sns.color_palette("Set2", n_colors=max(len(model_list), 3))
+    linestyles = ["solid", "dashed", "dotted", "dashdot"]
+    color_by_model = {mdl: colors[i % len(colors)] for i, mdl in enumerate(model_list)}
+    style_by_model = {mdl: linestyles[i % len(linestyles)] for i, mdl in enumerate(model_list)}
+
+    n = len(top_students)
+    fig, axes = plt.subplots(nrows=n, ncols=1, figsize=(10, 2.6 * n), sharex=False)
+    if n == 1:
+        axes = [axes]
+
+    for ax, sid in zip(axes, top_students):
+        # Ground truth points from dataset for this student (bold black dots at y=0/1)
+        sub = df.loc[id_map == sid]
+        y_true_all = pd.to_numeric(sub[config.COL_RESP], errors="coerce")
+        m = y_true_all.isin([0, 1])
+        ord_true = sub.loc[m, config.COL_ORDER].to_numpy()
+        gt = y_true_all[m].astype(int).to_numpy()
+        ax.scatter(ord_true, gt, s=35, c="black", edgecolors="white", linewidths=0.6, zorder=4, label="Ground truth")
+
+        # Model prediction lines (thin, semi-transparent)
+        for mdl in model_list:
+            data = model_preds[mdl]
+            mask_sid = id_map.loc[data["rows"]].astype(str).values == sid
+            if not mask_sid.any():
+                continue
+            rows_sid = data["rows"][mask_sid]
+            ord_sid = order_map.loc[rows_sid].to_numpy()
+            order_idx = np.argsort(ord_sid)
+            ord_sid = ord_sid[order_idx]
+            yp = data["y_prob"][mask_sid][order_idx]
+            ax.plot(
+                ord_sid,
+                yp,
+                color=color_by_model[mdl],
+                lw=1.5,
+                alpha=0.7,
+                linestyle=style_by_model[mdl],
+                label=mdl,
+            )
+        ax.set_ylim(0, 1)
+        ax.set_ylabel("p(correct)")
+        ax.set_title(f"Student {sid}")
+        ax.grid(True, alpha=0.25)
+    axes[-1].set_xlabel("Interaction order")
+    # Shared legend below
+    handles, labels = axes[0].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="lower center", ncol=min(3, len(labels)), fontsize=9)
+        fig.tight_layout(rect=[0, 0.07, 1, 0.97])
+    else:
+        fig.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.suptitle("Example Student Trajectories", y=0.995)
+    fig.savefig(outdir / "trajectories_all_models.png", dpi=300, bbox_inches="tight")
+    fig.savefig(outdir / "trajectories_all_models.pdf", bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_prediction_heatmaps(
+    metrics: pd.DataFrame,
+    outdir: Path,
+    max_students: int = 5,
+    min_len: int = 20,
+    max_len: int = 60,
+    max_steps_cap: int = 60,
+    annot_items: bool = False,
+):
+    """
+    For the current dataset, pick 4-5 students, and for ALL models produce a combined figure
+    with one heatmap per model (dataset-wise). Each heatmap shows rows=students, columns=interaction order,
+    and color = predicted probability. Item IDs are overlaid as small text per cell when available.
+    """
+    df = add_time_index(load_itemwise_df())
+    if config.COL_ID not in df.columns or config.COL_ORDER not in df.columns:
+        return
+    model_preds = _collect_model_predictions_with_dfrows(metrics)
+    if not model_preds:
+        return
+    id_map = df[config.COL_ID].astype(str)
+    order_map = df[config.COL_ORDER]
+    item_col = config.COL_ITEM if config.COL_ITEM in df.columns else (config.COL_ITEM_INDEX if config.COL_ITEM_INDEX in df.columns else None)
+    item_map = df[item_col].astype(str) if item_col else pd.Series(["" for _ in range(len(df))], index=df.index)
+
+    # Choose students by most coverage across models, restricted to length range
+    sizes = df.groupby(df[config.COL_ID].astype(str))[config.COL_ID].size()
+    allowed = set(sizes[(sizes >= min_len) & (sizes <= max_len)].index.astype(str).tolist())
+    sid_counts: Dict[str, int] = {}
+    for m in model_preds.values():
+        sids = id_map.loc[m["rows"]].astype(str)
+        for s in sids:
+            if s in allowed:
+                sid_counts[s] = sid_counts.get(s, 0) + 1
+    students = [s for s, _ in sorted(sid_counts.items(), key=lambda x: -x[1])][:max_students]
+    if not students:
+        return
+
+    M = len(model_preds)
+    ncols = 3
+    nrows = int(np.ceil(M / ncols))
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 2.6 * nrows))
+    axes = np.array(axes).reshape(nrows, ncols)
+    cmap = sns.color_palette("viridis", as_cmap=True)
+
+    mdl_list = list(model_preds.keys())
+    for i, mdl in enumerate(mdl_list):
+        r = i // ncols
+        c = i % ncols
+        ax = axes[r, c]
+        data = model_preds[mdl]
+        # For each student, align by order, build a dense vector with NaNs for missing
+        rows_mat = []
+        annotations: List[List[str]] = []
+        max_steps = 0
+        for sid in students:
+            mask_sid = id_map.loc[data["rows"]].astype(str).values == sid
+            if not mask_sid.any():
+                rows_mat.append(np.array([]))
+                annotations.append([])
+                continue
+            rows = data["rows"][mask_sid]
+            ords = order_map.loc[rows].to_numpy()
+            args = np.argsort(ords)
+            ords = ords[args]
+            probs = data["y_prob"][mask_sid][args]
+            items = item_map.loc[rows].astype(str).values[args]
+            # Cap sequence length for readability
+            if len(ords) > max_steps_cap:
+                ords = ords[:max_steps_cap]
+                probs = probs[:max_steps_cap]
+                items = items[:max_steps_cap]
+            max_steps = max(max_steps, len(ords))
+            rows_mat.append(probs)
+            annotations.append(items.tolist())
+        # Build a 2D array with NaNs padded to max_steps
+        mat = np.full((len(students), max_steps), np.nan, dtype=float)
+        ann = [["" for _ in range(max_steps)] for _ in range(len(students))]
+        for s_idx, rowv in enumerate(rows_mat):
+            if rowv.size:
+                L = min(max_steps, len(rowv))
+                mat[s_idx, :L] = rowv[:L]
+                for j in range(L):
+                    ann[s_idx][j] = annotations[s_idx][j]
+        # Render with mask so NaNs show as background
+        mask = ~np.isfinite(mat)
+        sns.heatmap(mat, ax=ax, cmap=cmap, vmin=0, vmax=1, mask=mask, cbar=True, cbar_kws={"shrink": 0.6})
+        ax.set_title(mdl)
+        ax.set_yticks(range(len(students)))
+        ax.set_yticklabels([str(s) for s in students])
+        ax.set_xticks(range(max_steps))
+        ax.set_xticklabels([str(k + 1) for k in range(max_steps)], fontsize=8)
+        ax.set_xlabel("Order")
+        if c == 0:
+            ax.set_ylabel("Student")
+        # Optional overlay of item ids
+        if annot_items:
+            for r_i in range(len(students)):
+                for c_j in range(max_steps):
+                    itxt = ann[r_i][c_j]
+                    if itxt:
+                        ax.text(c_j + 0.5, r_i + 0.5, str(itxt), ha="center", va="center", fontsize=6, color="white")
+
+    # Remove any unused axes
+    for j in range(i + 1, nrows * ncols):
+        r = j // ncols
+        c = j % ncols
+        fig.delaxes(axes[r, c])
+
+    fig.suptitle("Prediction Probability Heatmaps (rows=students, cols=order)", y=0.995)
+    fig.tight_layout()
+    fig.savefig(outdir / "heatmaps_all_models.png", dpi=300, bbox_inches="tight")
+    fig.savefig(outdir / "heatmaps_all_models.pdf", bbox_inches="tight")
+    plt.close(fig)
 
 
 def best_threshold(y_true: np.ndarray, y_prob: np.ndarray, metric: str = "f1") -> Tuple[float, Dict[str, float]]:
@@ -341,6 +637,17 @@ def main():
 
     # Per-model overviews
     plot_per_model(metrics, plot_dirs["per_model"])
+
+    # Qualitative plots using aligned row indices (if available)
+    try:
+        plot_student_trajectories_all_models(
+            metrics,
+            plot_dirs["summary"],
+            max_students=2,
+            models=getattr(config, "TRAJECTORY_MODELS", None),
+        )
+    except Exception as e:
+        print(f"[Trajectories] Skipped: {e}")
 
     print("Saved plots to:", plot_dirs["base"].resolve())
 

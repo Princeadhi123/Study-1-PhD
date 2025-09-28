@@ -132,13 +132,15 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     # Compute final smoothed dict on full train with best alpha
     smoothed, global_mean, _ = smooth_from_frame(train_df, best_alpha)
 
-    # Predict for test rows by group lookup
+    # Predict for test rows by group lookup; keep only valid binary rows and return their original indices
     g_series = test_df[config.COL_GROUP].astype(str) if config.COL_GROUP in test_df.columns else pd.Series([], dtype=str)
-    y_true = pd.to_numeric(test_df[config.COL_RESP], errors="coerce").values
-    y_prob = np.array([smoothed.get(g, global_mean) for g in g_series], dtype=float)
-
-    if y_prob.size == 0:
-        return {"category": "Graph", "name": "GKT-lite", "why": why, "error": "No test rows"}
+    y_all = pd.to_numeric(test_df[config.COL_RESP], errors="coerce")
+    mask = y_all.isin([0, 1])
+    if not mask.any():
+        return {"category": "Graph", "name": "GKT-lite", "why": why, "error": "No valid binary test rows"}
+    rows = test_df.index[mask].to_numpy()
+    y_true = y_all[mask].astype(int).values
+    y_prob = np.array([smoothed.get(g, global_mean) for g in g_series[mask]], dtype=float)
 
     return {
         "category": "Graph",
@@ -146,5 +148,6 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "why": why,
         "y_true": y_true,
         "y_prob": y_prob,
+        "test_rows": rows,
         "chosen_alpha": float(best_alpha),
     }

@@ -98,9 +98,12 @@ def save_predictions(outdir: Path, tag: str, result: Dict[str, Any]):
     # Attach row indices if provided
     if "test_rows" in result and isinstance(result["test_rows"], (list, np.ndarray, pd.Series)):
         idx = np.array(result["test_rows"])  # could be a subset
-        if idx.shape[0] == y_true.shape[0] or np.isnan(y_prob).sum() > 0:
-            # best effort: keep index alongside
-            df.insert(0, "df_row_index", idx[: len(df)])
+        # best effort: keep index alongside, aligned to available predictions
+        if idx.ndim > 1:
+            idx = idx.reshape(-1)
+        L = min(len(idx), len(df))
+        if L > 0:
+            df.insert(0, "df_row_index", np.asarray(idx[:L], dtype=int))
     df.to_csv(outdir / f"preds_{tag}.csv", index=False)
 
 
