@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib.colors import ListedColormap
+import matplotlib.patches as mpatches
 from sklearn.metrics import (
     roc_curve,
     roc_auc_score,
@@ -179,12 +181,32 @@ def plot_calibration_grid(metrics: pd.DataFrame, outdir: Path):
 
 
 def plot_confusion_matrices(metrics: pd.DataFrame, outdir: Path):
+    """
+    Plot a grid of confusion matrices with CONSISTENT colors for TN/FP/FN/TP across all models.
+    Color mapping (fixed):
+      TN -> blue, FP -> orange, FN -> red, TP -> greenish/teal.
+    """
     sns.set(style="white", context="paper")
     m = len(metrics)
     ncols = 3
     nrows = int(np.ceil(m / ncols))
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(6.5, 2.8 * nrows))
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(6.5, 2.9 * nrows))
     axes = np.array(axes).reshape(nrows, ncols)
+
+    # Fixed color mapping per cell index (0..3) across all matrices
+    # cm layout: [[TN, FP], [FN, TP]]
+    color_list = ["#4C78A8", "#F58518", "#E45756", "#72B7B2"]  # TN, FP, FN, TP
+    cmap = ListedColormap(color_list)
+    color_index = np.array([[0, 1], [2, 3]])
+
+    # For a shared legend
+    patches = [
+        mpatches.Patch(color=color_list[0], label="TN"),
+        mpatches.Patch(color=color_list[1], label="FP"),
+        mpatches.Patch(color=color_list[2], label="FN"),
+        mpatches.Patch(color=color_list[3], label="TP"),
+    ]
+
     for i, row in metrics.reset_index(drop=True).iterrows():
         r = i // ncols
         c = i % ncols
@@ -195,20 +217,36 @@ def plot_confusion_matrices(metrics: pd.DataFrame, outdir: Path):
             t, stats = best_threshold(y_true, y_prob, metric="f1")
             y_pred = (y_prob >= t).astype(int)
             cm = confusion_matrix(y_true, y_pred)
-            disp = ConfusionMatrixDisplay(cm)
-            disp.plot(ax=ax, colorbar=False)
-            ax.set_title(f"{name}\nT={t:.2f} | F1={stats['f1']:.3f} Acc={stats['accuracy']:.3f}", fontsize=9)
+            # Draw colored cells with fixed mapping, independent of count magnitudes
+            ax.imshow(color_index, cmap=cmap, vmin=0, vmax=3)
+            # Annotate counts
+            tn, fp, fn, tp = cm[0, 0], cm[0, 1], cm[1, 0], cm[1, 1]
+            counts = np.array([[tn, fp], [fn, tp]])
+            for (rr, cc), val in np.ndenumerate(counts):
+                ax.text(cc, rr, f"{val}", ha="center", va="center", color="white", fontsize=9, fontweight="bold")
+            # Axes cosmetics
+            ax.set_xticks([0, 1], labels=["0", "1"])  # predicted
+            ax.set_yticks([0, 1], labels=["0", "1"])  # true
+            ax.set_xlabel("Predicted label")
+            ax.set_ylabel("True label")
+            # Title: model name only (remove threshold/metrics)
+            ax.set_title(f"{name}", fontsize=9)
         except Exception as e:
             ax.text(0.5, 0.5, f"No data\n{name}", ha="center", va="center")
+            ax.set_xticks([]); ax.set_yticks([])
+
     # Remove empty axes
     for j in range(i + 1, nrows * ncols):
         r = j // ncols
         c = j % ncols
         fig.delaxes(axes[r, c])
+
+    # Shared legend and title
+    fig.legend(handles=patches, loc="lower center", ncol=4, title="Cells", title_fontsize=9, fontsize=8)
     fig.suptitle("Confusion Matrices (threshold chosen by max F1)", y=0.995)
-    fig.tight_layout()
-    fig.savefig(outdir / "confusion_matrices.png", dpi=300)
-    fig.savefig(outdir / "confusion_matrices.pdf")
+    fig.tight_layout(rect=[0, 0.05, 1, 0.96])
+    fig.savefig(outdir / "confusion_matrices.png", dpi=300, bbox_inches="tight")
+    fig.savefig(outdir / "confusion_matrices.pdf", bbox_inches="tight")
     plt.close(fig)
 
 

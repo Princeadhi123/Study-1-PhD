@@ -103,17 +103,25 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     if config.COL_GROUP not in df.columns or config.COL_RESP not in df.columns or config.COL_ID not in df.columns:
         return {"category": "Bayesian", "name": "BKT", "why": why, "error": "Required columns missing (group/response/ID)"}
 
-    # Fit per-group params on train only (respect time budget)
+    # Fit params on train only (respect time budget)
     train_df = df.iloc[train_idx].copy()
     train_df = train_df.dropna(subset=[config.COL_RESP])
+    use_per_group: bool = getattr(config, "BKT_PER_GROUP", True)
     group_params: Dict[str, BKTParams] = {}
+    global_params: BKTParams | None = None
     start_time = time.perf_counter()
     budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
-    for g, sub in train_df.groupby(config.COL_GROUP, dropna=False):
-        if budget is not None and (time.perf_counter() - start_time) > float(budget):
-            break
-        p = _fit_group_params(sub)
-        group_params[str(g)] = p
+
+    if use_per_group and (config.COL_GROUP in train_df.columns):
+        for g, sub in train_df.groupby(config.COL_GROUP, dropna=False):
+            if budget is not None and (time.perf_counter() - start_time) > float(budget):
+                break
+            p = _fit_group_params(sub)
+            group_params[str(g)] = p
+    else:
+        # Fit a single global BKT
+        # Uses entire train_df sequences by student
+        global_params = _fit_group_params(train_df)
 
     # Predict on test: sequentially within each student per group
     test_df = df.iloc[test_idx].copy()
@@ -128,7 +136,10 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         y = y.where(mask).dropna().astype(int)
         if y.empty:
             continue
-        params = group_params.get(str(g), BKTParams(0.1, 0.1, 0.1, 0.1))
+        if use_per_group:
+            params = group_params.get(str(g), BKTParams(0.1, 0.1, 0.1, 0.1))
+        else:
+            params = global_params or BKTParams(0.1, 0.1, 0.1, 0.1)
         probs = _predict_sequence_probs(y.values, params)
         y_true_list.extend(y.values.tolist())
         y_prob_list.extend(probs.tolist())

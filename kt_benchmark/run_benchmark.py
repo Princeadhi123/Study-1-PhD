@@ -16,6 +16,20 @@ from .metrics import safe_metrics
 # Import model runners
 from .models import rasch, bkt, logreg, dkt, gkt, tirt, mtl, contrastive, adapt
 
+import re
+
+
+def _sanitize_model_name(name: str) -> str:
+    s = name
+    # Remove specific parenthetical qualifiers e.g., (minimal), (CORAL)
+    s = re.sub(r"\s*\((?:minimal|coral)\)", "", s, flags=re.IGNORECASE)
+    # Remove standalone word 'lite'
+    s = re.sub(r"\blite\b", "", s, flags=re.IGNORECASE)
+    # Clean up repeated spaces and dangling hyphens/underscores
+    s = re.sub(r"\s+", " ", s)
+    s = s.strip().strip("-_ ")
+    return s
+
 
 def ensure_outdir() -> Path:
     out = config.OUTPUT_DIR
@@ -104,15 +118,15 @@ def main():
 
     # Register models
     runners = [
-        (rasch.run, "Rasch1PL", "Psychometric (IRT)"),
-        (bkt.run, "BKT", "Bayesian"),
-        (logreg.run, "LogisticRegression", "Machine Learning"),
-        (dkt.run, "DKT (minimal)", "Deep Learning"),
-        (gkt.run, "GKT-lite", "Graph"),
-        (tirt.run, "TIRT-lite", "Temporal/Sequential"),
-        (mtl.run, "FKT-lite", "Multi-task"),
-        (contrastive.run, "CLKT-lite", "Contrastive/Self-supervised"),
-        (adapt.run, "AdaptKT-lite (CORAL)", "Domain Adaptive"),
+        (rasch.run, _sanitize_model_name("Rasch1PL"), "Psychometric (IRT)"),
+        (bkt.run, _sanitize_model_name("BKT"), "Bayesian"),
+        (logreg.run, _sanitize_model_name("LogisticRegression"), "Machine Learning"),
+        (dkt.run, _sanitize_model_name("DKT (minimal)"), "Deep Learning"),
+        (gkt.run, _sanitize_model_name("GKT-lite"), "Graph"),
+        (tirt.run, _sanitize_model_name("TIRT-lite"), "Temporal/Sequential"),
+        (mtl.run, _sanitize_model_name("FKT-lite"), "Multi-task"),
+        (contrastive.run, _sanitize_model_name("CLKT-lite"), "Contrastive/Self-supervised"),
+        (adapt.run, _sanitize_model_name("AdaptKT-lite (CORAL)"), "Domain Adaptive"),
     ]
 
     # Execute

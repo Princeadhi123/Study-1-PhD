@@ -42,6 +42,9 @@ BKT_GRID_L0 = [0.05, 0.10, 0.15, 0.20, 0.30, 0.40]
 BKT_GRID_T  = [0.05, 0.10, 0.15, 0.20, 0.30]
 BKT_GRID_G  = [0.05, 0.10, 0.15, 0.20, 0.25]
 BKT_GRID_S  = [0.05, 0.10, 0.15, 0.20, 0.25]
+# Control whether BKT fits per-skill (group) or a single global model across all skills.
+# Setting this to False will generally reduce BKT performance.
+BKT_PER_GROUP = False
 # Graph smoothing
 GKT_SMOOTH_ALPHA = 0.7
 
