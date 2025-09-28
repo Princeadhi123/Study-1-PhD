@@ -196,6 +196,9 @@ def plot_student_trajectories_all_models(
     linestyles = ["solid"]  # keep all lines solid for easier tracing
     color_by_model = {mdl: colors[i % len(colors)] for i, mdl in enumerate(model_list)}
     style_by_model = {mdl: linestyles[i % len(linestyles)] for i, mdl in enumerate(model_list)}
+    # Per-line markers for additional distinguishability
+    markers = ["D", "o", "s", "^", "v", "P", "X", "*", "<", ">"]
+    marker_by_model = {mdl: markers[i % len(markers)] for i, mdl in enumerate(model_list)}
 
     n = len(top_students)
     fig, axes = plt.subplots(nrows=n, ncols=1, figsize=(12, 2.7 * n), sharex=False)
@@ -229,6 +232,12 @@ def plot_student_trajectories_all_models(
                 lw=2.2,
                 alpha=0.9,
                 linestyle=style_by_model[mdl],
+                marker=marker_by_model[mdl],
+                markevery=5,
+                markersize=4.5,
+                markerfacecolor="white",
+                markeredgecolor=color_by_model[mdl],
+                markeredgewidth=0.9,
                 path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
                 label=mdl,
             )
