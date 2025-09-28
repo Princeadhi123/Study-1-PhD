@@ -206,13 +206,35 @@ def plot_student_trajectories_all_models(
         axes = [axes]
 
     for ax, sid in zip(axes, top_students):
-        # Ground truth points from dataset for this student (bold black dots at y=0/1)
-        sub = df.loc[id_map == sid]
-        y_true_all = pd.to_numeric(sub[config.COL_RESP], errors="coerce")
-        m = y_true_all.isin([0, 1])
-        ord_true = sub.loc[m, config.COL_ORDER].to_numpy()
-        gt = y_true_all[m].astype(int).to_numpy()
-        ax.scatter(ord_true, gt, s=35, c="black", edgecolors="white", linewidths=0.6, zorder=4, label="Ground truth")
+        # Ground truth points: show ONLY test rows available for any selected model for this student
+        # This makes the dots end where the model lines end.
+        rows_union_list = []
+        for mdl in model_list:
+            data = model_preds[mdl]
+            mask_sid = id_map.loc[data["rows"]].astype(str).values == sid
+            if mask_sid.any():
+                rows_union_list.append(data["rows"][mask_sid])
+        if rows_union_list:
+            rows_union = np.unique(np.concatenate(rows_union_list))
+            ord_u = order_map.loc[rows_union].to_numpy()
+            sort_idx = np.argsort(ord_u)
+            rows_union = rows_union[sort_idx]
+            ord_true = order_map.loc[rows_union].to_numpy()
+            gt_vals = pd.to_numeric(df.loc[rows_union, config.COL_RESP], errors="coerce").to_numpy()
+            m = np.isin(gt_vals, [0, 1]) & np.isfinite(ord_true)
+            ax.scatter(
+                ord_true[m],
+                gt_vals[m].astype(int),
+                s=35,
+                c="black",
+                edgecolors="white",
+                linewidths=0.6,
+                zorder=4,
+                label="Ground truth",
+            )
+        else:
+            # Fallback: if no test rows found (unlikely), skip dots for this student
+            pass
 
         # Model prediction lines (thicker, higher-contrast)
         for mdl in model_list:
