@@ -693,52 +693,280 @@ def best_threshold(y_true: np.ndarray, y_prob: np.ndarray, metric: str = "f1") -
 
 
 def plot_roc_all(metrics: pd.DataFrame, outdir: Path):
+    """Grouped ROC overlay (Classical vs Advanced) styled like the trajectories plot.
+    Two stacked panels, consistent colors/linestyles/markers, shared legend below.
+    """
     sns.set(style="whitegrid", context="paper")
-    fig, ax = plt.subplots(figsize=(6.5, 5))
-    colors = sns.color_palette("tab10", n_colors=len(metrics))
-    for i, row in metrics.iterrows():
+
+    # Define groups similar to plot_student_trajectories_grouped()
+    group_defs = {
+        "Classical baselines": ["BKT", "Rasch1PL", "LogisticRegression", "TIRT"],
+        "Advanced models": ["DKT", "FKT", "CLKT", "AdaptKT", "GKT"],
+    }
+
+    # Compute curves and AUCs (keep original names and a sanitized key)
+    curves: List[Tuple[str, str, float, np.ndarray, np.ndarray]] = []  # (orig, san, auc, fpr, tpr)
+    for _, row in metrics.iterrows():
         name = row["model"]
         try:
             y_true, y_prob = _load_predictions(config.OUTPUT_DIR, name)
+            if len(y_true) == 0:
+                continue
             fpr, tpr, _ = roc_curve(y_true, y_prob)
             auc_val = roc_auc_score(y_true, y_prob)
-            ax.plot(fpr, tpr, label=f"{name} (AUC={auc_val:.3f})", color=colors[i % len(colors)], lw=2)
+            curves.append((name, _sanitize_model_name(name), float(auc_val), fpr, tpr))
         except Exception as e:
             print(f"[ROC] Skipping {name}: {e}")
-    ax.plot([0, 1], [0, 1], "--", color="gray", lw=1)
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.set_title("ROC Curves (Test)")
-    ax.legend(loc="lower right", fontsize=8)
-    fig.tight_layout()
-    fig.savefig(outdir / "roc_all.png", dpi=300)
-    fig.savefig(outdir / "roc_all.pdf")
+
+    if not curves:
+        return
+
+    # Map sanitized -> an original key we actually have curves for
+    key_by_sanitized: Dict[str, str] = {}
+    for orig, san, _, _, _ in curves:
+        if san not in key_by_sanitized:
+            key_by_sanitized[san] = orig
+
+    # Colors and styles (fixed known palette + fallbacks)
+    fixed_colors = {
+        "dkt": "#CC79A7",
+        "fkt": "#009E73",
+        "clkt": "#0072B2",
+        "adaptkt": "#D55E00",
+        "gkt": "#E69F00",
+        "bkt": "#56B4E9",
+        "rasch1pl": "#0072B2",
+        "logisticregression": "#009E73",
+        "tirt": "#D55E00",
+    }
+    palette = sns.color_palette("colorblind", n_colors=max(9, len(curves)))
+    color_by_name: Dict[str, tuple] = {}
+    fb = 0
+    for orig, san, _, _, _ in curves:
+        key = san.lower()
+        if key in fixed_colors:
+            color_by_name[orig] = fixed_colors[key]
+        else:
+            color_by_name[orig] = palette[fb % len(palette)]
+            fb += 1
+
+    def linestyle_for(name: str) -> str:
+        fam = _family_of_model(name)
+        if fam == "deep":
+            return "solid"
+        if fam == "classical":
+            return "dashed"
+        if fam == "hybrid":
+            return "dotted"
+        if fam == "graph":
+            return "dashdot"
+        return "solid"
+
+    # Figure with two side-by-side panels (square axes)
+    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 6.2), sharex=True, sharey=True)
+    axes = np.array(axes).ravel()
+
+    # Draw panels
+    for ax, (panel_title, mdl_san_list) in zip(axes, group_defs.items()):
+        ax.grid(True, color="#d0d0d0", alpha=0.35)
+        # Baseline
+        ax.plot([0, 1], [0, 1], linestyle="--", color="gray", lw=1.2, alpha=0.85, label="Random (AUC=0.5)")
+        # Model curves (no markers to avoid visual clutter)
+        for i, san in enumerate(mdl_san_list):
+            key = key_by_sanitized.get(_sanitize_model_name(san))
+            if not key:
+                continue
+            tup = next((t for t in curves if t[0] == key), None)
+            if tup is None:
+                continue
+            orig, san2, auc_val, fpr, tpr = tup
+            ax.plot(
+                fpr,
+                tpr,
+                color=color_by_name[orig],
+                lw=2.2,
+                alpha=0.98,
+                linestyle=linestyle_for(orig),
+                zorder=5,
+                path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
+                label=f"{san2} (AUC={auc_val:.3f})",
+            )
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_ylabel("True Positive Rate")
+        ax.set_title(f"ROC — {panel_title}")
+        try:
+            ax.set_aspect("equal", adjustable="box")
+        except Exception:
+            pass
+
+    axes[-1].set_xlabel("False Positive Rate")
+
+    # Shared legend below both panels (deduplicated)
+    handles_all: List[object] = []
+    labels_all: List[str] = []
+    for a in axes:
+        h, l = a.get_legend_handles_labels()
+        for hh, ll in zip(h, l):
+            if ll and ll not in labels_all:
+                handles_all.append(hh)
+                labels_all.append(ll)
+    if handles_all:
+        fig.legend(
+            handles_all,
+            labels_all,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.04),
+            ncol=min(9, len(labels_all)),
+            fontsize=9,
+            frameon=True,
+            title="Models",
+            title_fontsize=9,
+        )
+        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+    else:
+        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+
+    fig.savefig(outdir / "roc_all.png", dpi=300, bbox_inches="tight")
+    fig.savefig(outdir / "roc_all.pdf", bbox_inches="tight")
     plt.close(fig)
 
 
 def plot_pr_all(metrics: pd.DataFrame, outdir: Path):
+    """Grouped PR overlay (Classical vs Advanced) styled like the trajectories plot.
+    Two stacked panels, consistent colors/linestyles/markers, shared legend below.
+    """
     sns.set(style="whitegrid", context="paper")
-    fig, ax = plt.subplots(figsize=(6.5, 5))
-    colors = sns.color_palette("tab10", n_colors=len(metrics))
-    for i, row in metrics.iterrows():
+
+    group_defs = {
+        "Classical baselines": ["BKT", "Rasch1PL", "LogisticRegression", "TIRT"],
+        "Advanced models": ["DKT", "FKT", "CLKT", "AdaptKT", "GKT"],
+    }
+
+    # Collect PR curves
+    curves: List[Tuple[str, str, float, np.ndarray, np.ndarray]] = []  # (orig, san, ap, rec, prec)
+    base_vals: List[float] = []
+    for _, row in metrics.iterrows():
         name = row["model"]
         try:
             y_true, y_prob = _load_predictions(config.OUTPUT_DIR, name)
-            precision, recall, _ = precision_recall_curve(y_true, y_prob)
+            if len(y_true) == 0:
+                continue
+            prec, rec, _ = precision_recall_curve(y_true, y_prob)
             ap = average_precision_score(y_true, y_prob)
-            base = y_true.mean() if len(y_true) else 0.0
-            ax.plot(recall, precision, label=f"{name} (AP={ap:.3f})", color=colors[i % len(colors)], lw=2)
+            curves.append((name, _sanitize_model_name(name), float(ap), rec, prec))
+            base_vals.append(float(np.mean(y_true)))
         except Exception as e:
             print(f"[PR] Skipping {name}: {e}")
-    # baseline
-    ax.hlines(base, 0, 1, colors="gray", linestyles="--", label=f"Baseline={base:.3f}")
-    ax.set_xlabel("Recall")
-    ax.set_ylabel("Precision")
-    ax.set_title("Precision-Recall Curves (Test)")
-    ax.legend(loc="lower left", fontsize=8)
-    fig.tight_layout()
-    fig.savefig(outdir / "pr_all.png", dpi=300)
-    fig.savefig(outdir / "pr_all.pdf")
+
+    if not curves:
+        return
+
+    key_by_sanitized: Dict[str, str] = {}
+    for orig, san, _, _, _ in curves:
+        if san not in key_by_sanitized:
+            key_by_sanitized[san] = orig
+
+    fixed_colors = {
+        "dkt": "#CC79A7",
+        "fkt": "#009E73",
+        "clkt": "#0072B2",
+        "adaptkt": "#D55E00",
+        "gkt": "#E69F00",
+        "bkt": "#56B4E9",
+        "rasch1pl": "#0072B2",
+        "logisticregression": "#009E73",
+        "tirt": "#D55E00",
+    }
+    palette = sns.color_palette("colorblind", n_colors=max(9, len(curves)))
+    color_by_name: Dict[str, tuple] = {}
+    fb = 0
+    for orig, san, _, _, _ in curves:
+        key = san.lower()
+        if key in fixed_colors:
+            color_by_name[orig] = fixed_colors[key]
+        else:
+            color_by_name[orig] = palette[fb % len(palette)]
+            fb += 1
+
+    def linestyle_for(name: str) -> str:
+        fam = _family_of_model(name)
+        if fam == "deep":
+            return "solid"
+        if fam == "classical":
+            return "dashed"
+        if fam == "hybrid":
+            return "dotted"
+        if fam == "graph":
+            return "dashdot"
+        return "solid"
+
+    base = float(np.median(base_vals)) if base_vals else 0.0
+
+    # Two side-by-side square panels
+    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 6.2), sharex=True, sharey=True)
+    axes = np.array(axes).ravel()
+
+    for ax, (panel_title, mdl_san_list) in zip(axes, group_defs.items()):
+        ax.grid(True, color="#d0d0d0", alpha=0.4)
+        # Baseline: class prior
+        ax.hlines(base, 0, 1, colors="gray", linestyles="--", lw=1.2, alpha=0.9, label=f"Class prior (≈ {base:.3f})")
+        for i, san in enumerate(mdl_san_list):
+            key = key_by_sanitized.get(_sanitize_model_name(san))
+            if not key:
+                continue
+            tup = next((t for t in curves if t[0] == key), None)
+            if tup is None:
+                continue
+            orig, san2, ap, rec, prec = tup
+            ax.plot(
+                rec,
+                prec,
+                color=color_by_name[orig],
+                lw=2.2,
+                alpha=0.98,
+                linestyle=linestyle_for(orig),
+                zorder=5,
+                path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
+                label=f"{san2} (AP={ap:.3f})",
+            )
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1)
+        ax.set_ylabel("Precision")
+        ax.set_title(f"Precision–Recall — {panel_title}")
+        try:
+            ax.set_aspect("equal", adjustable="box")
+        except Exception:
+            pass
+
+    axes[-1].set_xlabel("Recall")
+
+    handles_all: List[object] = []
+    labels_all: List[str] = []
+    for a in axes:
+        h, l = a.get_legend_handles_labels()
+        for hh, ll in zip(h, l):
+            if ll and ll not in labels_all:
+                handles_all.append(hh)
+                labels_all.append(ll)
+    if handles_all:
+        fig.legend(
+            handles_all,
+            labels_all,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.04),
+            ncol=min(9, len(labels_all)),
+            fontsize=9,
+            frameon=True,
+            title="Models",
+            title_fontsize=9,
+        )
+        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+    else:
+        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+
+    fig.savefig(outdir / "pr_all.png", dpi=300, bbox_inches="tight")
+    fig.savefig(outdir / "pr_all.pdf", bbox_inches="tight")
     plt.close(fig)
 
 
