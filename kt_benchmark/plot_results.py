@@ -11,6 +11,7 @@ import seaborn as sns
 from matplotlib.colors import ListedColormap
 import matplotlib.patches as mpatches
 import matplotlib.patheffects as patheffects
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from sklearn.metrics import (
     roc_curve,
     roc_auc_score,
@@ -552,122 +553,7 @@ def plot_student_trajectories_grouped(
     _plot_grid("Classical baselines", "classical")
     _plot_grid("Advanced models", "advanced")
 
-def plot_prediction_heatmaps(
-    metrics: pd.DataFrame,
-    outdir: Path,
-    max_students: int = 5,
-    min_len: int = 20,
-    max_len: int = 60,
-    max_steps_cap: int = 60,
-    annot_items: bool = False,
-):
-    """
-    For the current dataset, pick 4-5 students, and for ALL models produce a combined figure
-    with one heatmap per model (dataset-wise). Each heatmap shows rows=students, columns=interaction order,
-    and color = predicted probability. Item IDs are overlaid as small text per cell when available.
-    """
-    df = add_time_index(load_itemwise_df())
-    if config.COL_ID not in df.columns or config.COL_ORDER not in df.columns:
-        return
-    model_preds = _collect_model_predictions_with_dfrows(metrics)
-    if not model_preds:
-        return
-    id_map = df[config.COL_ID].astype(str)
-    order_map = df[config.COL_ORDER]
-    item_col = config.COL_ITEM if config.COL_ITEM in df.columns else (config.COL_ITEM_INDEX if config.COL_ITEM_INDEX in df.columns else None)
-    item_map = df[item_col].astype(str) if item_col else pd.Series(["" for _ in range(len(df))], index=df.index)
-
-    # Choose students by most coverage across models, restricted to length range
-    sizes = df.groupby(df[config.COL_ID].astype(str))[config.COL_ID].size()
-    allowed = set(sizes[(sizes >= min_len) & (sizes <= max_len)].index.astype(str).tolist())
-    sid_counts: Dict[str, int] = {}
-    for m in model_preds.values():
-        sids = id_map.loc[m["rows"]].astype(str)
-        for s in sids:
-            if s in allowed:
-                sid_counts[s] = sid_counts.get(s, 0) + 1
-    students = [s for s, _ in sorted(sid_counts.items(), key=lambda x: -x[1])][:max_students]
-    if not students:
-        return
-
-    M = len(model_preds)
-    ncols = 3
-    nrows = int(np.ceil(M / ncols))
-    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 2.6 * nrows))
-    axes = np.array(axes).reshape(nrows, ncols)
-    cmap = sns.color_palette("viridis", as_cmap=True)
-
-    mdl_list = list(model_preds.keys())
-    for i, mdl in enumerate(mdl_list):
-        r = i // ncols
-        c = i % ncols
-        ax = axes[r, c]
-        data = model_preds[mdl]
-        # For each student, align by order, build a dense vector with NaNs for missing
-        rows_mat = []
-        annotations: List[List[str]] = []
-        max_steps = 0
-        for sid in students:
-            mask_sid = id_map.loc[data["rows"]].astype(str).values == sid
-            if not mask_sid.any():
-                rows_mat.append(np.array([]))
-                annotations.append([])
-                continue
-            rows = data["rows"][mask_sid]
-            ords = order_map.loc[rows].to_numpy()
-            args = np.argsort(ords)
-            ords = ords[args]
-            probs = data["y_prob"][mask_sid][args]
-            items = item_map.loc[rows].astype(str).values[args]
-            # Cap sequence length for readability
-            if len(ords) > max_steps_cap:
-                ords = ords[:max_steps_cap]
-                probs = probs[:max_steps_cap]
-                items = items[:max_steps_cap]
-            max_steps = max(max_steps, len(ords))
-            rows_mat.append(probs)
-            annotations.append(items.tolist())
-        # Build a 2D array with NaNs padded to max_steps
-        mat = np.full((len(students), max_steps), np.nan, dtype=float)
-        ann = [["" for _ in range(max_steps)] for _ in range(len(students))]
-        for s_idx, rowv in enumerate(rows_mat):
-            if rowv.size:
-                L = min(max_steps, len(rowv))
-                mat[s_idx, :L] = rowv[:L]
-                for j in range(L):
-                    ann[s_idx][j] = annotations[s_idx][j]
-        # Render with mask so NaNs show as background
-        mask = ~np.isfinite(mat)
-        sns.heatmap(mat, ax=ax, cmap=cmap, vmin=0, vmax=1, mask=mask, cbar=True, cbar_kws={"shrink": 0.6})
-        ax.set_title(mdl)
-        ax.set_yticks(range(len(students)))
-        ax.set_yticklabels([str(s) for s in students])
-        ax.set_xticks(range(max_steps))
-        ax.set_xticklabels([str(k + 1) for k in range(max_steps)], fontsize=8)
-        ax.set_xlabel("Order")
-        if c == 0:
-            ax.set_ylabel("Student")
-        # Optional overlay of item ids
-        if annot_items:
-            for r_i in range(len(students)):
-                for c_j in range(max_steps):
-                    itxt = ann[r_i][c_j]
-                    if itxt:
-                        ax.text(c_j + 0.5, r_i + 0.5, str(itxt), ha="center", va="center", fontsize=6, color="white")
-
-    # Remove any unused axes
-    for j in range(i + 1, nrows * ncols):
-        r = j // ncols
-        c = j % ncols
-        fig.delaxes(axes[r, c])
-
-    fig.suptitle("Prediction Probability Heatmaps (rows=students, cols=order)", y=0.995)
-    fig.tight_layout()
-    fig.savefig(outdir / "heatmaps_all_models.png", dpi=300, bbox_inches="tight")
-    fig.savefig(outdir / "heatmaps_all_models.pdf", bbox_inches="tight")
-    plt.close(fig)
-
-
+   
 def best_threshold(y_true: np.ndarray, y_prob: np.ndarray, metric: str = "f1") -> Tuple[float, Dict[str, float]]:
     thresholds = np.linspace(0.01, 0.99, 99)
     best_t = 0.5
@@ -693,159 +579,28 @@ def best_threshold(y_true: np.ndarray, y_prob: np.ndarray, metric: str = "f1") -
 
 
 def plot_roc_all(metrics: pd.DataFrame, outdir: Path):
-    """Grouped ROC overlay (Classical vs Advanced) styled like the trajectories plot.
-    Two stacked panels, consistent colors/linestyles/markers, shared legend below.
+    """Top-3 ROC wrapper (legacy name).
+    We now only present Top-3 ROC; this function delegates and returns early.
     """
-    sns.set(style="whitegrid", context="paper")
-
-    # Define groups similar to plot_student_trajectories_grouped()
-    group_defs = {
-        "Classical baselines": ["BKT", "Rasch1PL", "LogisticRegression", "TIRT"],
-        "Advanced models": ["DKT", "FKT", "CLKT", "AdaptKT", "GKT"],
-    }
-
-    # Compute curves and AUCs (keep original names and a sanitized key)
-    curves: List[Tuple[str, str, float, np.ndarray, np.ndarray]] = []  # (orig, san, auc, fpr, tpr)
-    for _, row in metrics.iterrows():
-        name = row["model"]
-        try:
-            y_true, y_prob = _load_predictions(config.OUTPUT_DIR, name)
-            if len(y_true) == 0:
-                continue
-            fpr, tpr, _ = roc_curve(y_true, y_prob)
-            auc_val = roc_auc_score(y_true, y_prob)
-            curves.append((name, _sanitize_model_name(name), float(auc_val), fpr, tpr))
-        except Exception as e:
-            print(f"[ROC] Skipping {name}: {e}")
-
-    if not curves:
-        return
-
-    # Map sanitized -> an original key we actually have curves for
-    key_by_sanitized: Dict[str, str] = {}
-    for orig, san, _, _, _ in curves:
-        if san not in key_by_sanitized:
-            key_by_sanitized[san] = orig
-
-    # Colors and styles (fixed known palette + fallbacks)
-    fixed_colors = {
-        "dkt": "#CC79A7",
-        "fkt": "#009E73",
-        "clkt": "#0072B2",
-        "adaptkt": "#D55E00",
-        "gkt": "#E69F00",
-        "bkt": "#56B4E9",
-        "rasch1pl": "#0072B2",
-        "logisticregression": "#009E73",
-        "tirt": "#D55E00",
-    }
-    palette = sns.color_palette("colorblind", n_colors=max(9, len(curves)))
-    color_by_name: Dict[str, tuple] = {}
-    fb = 0
-    for orig, san, _, _, _ in curves:
-        key = san.lower()
-        if key in fixed_colors:
-            color_by_name[orig] = fixed_colors[key]
-        else:
-            color_by_name[orig] = palette[fb % len(palette)]
-            fb += 1
-
-    def linestyle_for(name: str) -> str:
-        fam = _family_of_model(name)
-        if fam == "deep":
-            return "solid"
-        if fam == "classical":
-            return "dashed"
-        if fam == "hybrid":
-            return "dotted"
-        if fam == "graph":
-            return "dashdot"
-        return "solid"
-
-    # Figure with two side-by-side panels (square axes)
-    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 6.2), sharex=True, sharey=True)
-    axes = np.array(axes).ravel()
-
-    # Draw panels
-    for ax, (panel_title, mdl_san_list) in zip(axes, group_defs.items()):
-        ax.grid(True, color="#d0d0d0", alpha=0.35)
-        # Baseline
-        ax.plot([0, 1], [0, 1], linestyle="--", color="gray", lw=1.2, alpha=0.85, label="Random (AUC=0.5)")
-        # Model curves (no markers to avoid visual clutter)
-        for i, san in enumerate(mdl_san_list):
-            key = key_by_sanitized.get(_sanitize_model_name(san))
-            if not key:
-                continue
-            tup = next((t for t in curves if t[0] == key), None)
-            if tup is None:
-                continue
-            orig, san2, auc_val, fpr, tpr = tup
-            ax.plot(
-                fpr,
-                tpr,
-                color=color_by_name[orig],
-                lw=2.2,
-                alpha=0.98,
-                linestyle=linestyle_for(orig),
-                zorder=5,
-                path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
-                label=f"{san2} (AUC={auc_val:.3f})",
-            )
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.set_ylabel("True Positive Rate")
-        ax.set_title(f"ROC — {panel_title}")
-        try:
-            ax.set_aspect("equal", adjustable="box")
-        except Exception:
-            pass
-
-    axes[-1].set_xlabel("False Positive Rate")
-
-    # Shared legend below both panels (deduplicated)
-    handles_all: List[object] = []
-    labels_all: List[str] = []
-    for a in axes:
-        h, l = a.get_legend_handles_labels()
-        for hh, ll in zip(h, l):
-            if ll and ll not in labels_all:
-                handles_all.append(hh)
-                labels_all.append(ll)
-    if handles_all:
-        fig.legend(
-            handles_all,
-            labels_all,
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.04),
-            ncol=min(9, len(labels_all)),
-            fontsize=9,
-            frameon=True,
-            title="Models",
-            title_fontsize=9,
-        )
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
-    else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
-
-    fig.savefig(outdir / "roc_all.png", dpi=300, bbox_inches="tight")
-    fig.savefig(outdir / "roc_all.pdf", bbox_inches="tight")
-    plt.close(fig)
-
+    return plot_roc_top3(metrics, outdir)
 
 def plot_pr_all(metrics: pd.DataFrame, outdir: Path):
-    """Grouped PR overlay (Classical vs Advanced) styled like the trajectories plot.
-    Two stacked panels, consistent colors/linestyles/markers, shared legend below.
+    """Top-3 PR wrapper (legacy name).
+    We now only present Top-3 PR; this function delegates and returns early.
+    """
+    return plot_pr_top3(metrics, outdir)
+    
+def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
+    """Single square PR chart with ONLY the top-3 models (by AP).
+    Lines are drawn thicker with white outlines and sparse markers so close curves
+    remain distinguishable.
+    Saves: pr_top3.png / pr_top3.pdf
     """
     sns.set(style="whitegrid", context="paper")
 
-    group_defs = {
-        "Classical baselines": ["BKT", "Rasch1PL", "LogisticRegression", "TIRT"],
-        "Advanced models": ["DKT", "FKT", "CLKT", "AdaptKT", "GKT"],
-    }
-
-    # Collect PR curves
-    curves: List[Tuple[str, str, float, np.ndarray, np.ndarray]] = []  # (orig, san, ap, rec, prec)
-    base_vals: List[float] = []
+    # Collect PR data
+    curves = []  # (name, ap, recall, precision)
+    base_vals = []
     for _, row in metrics.iterrows():
         name = row["model"]
         try:
@@ -854,18 +609,146 @@ def plot_pr_all(metrics: pd.DataFrame, outdir: Path):
                 continue
             prec, rec, _ = precision_recall_curve(y_true, y_prob)
             ap = average_precision_score(y_true, y_prob)
-            curves.append((name, _sanitize_model_name(name), float(ap), rec, prec))
+            curves.append((name, float(ap), rec, prec))
             base_vals.append(float(np.mean(y_true)))
         except Exception as e:
-            print(f"[PR] Skipping {name}: {e}")
+            print(f"[PR-top3] Skipping {name}: {e}")
 
     if not curves:
         return
+    curves.sort(key=lambda x: -x[1])
+    top3 = curves[:3]
 
-    key_by_sanitized: Dict[str, str] = {}
-    for orig, san, _, _, _ in curves:
-        if san not in key_by_sanitized:
-            key_by_sanitized[san] = orig
+    # Colors: fixed mapping + fallback
+    fixed_colors = {
+        "dkt": "#CC79A7",
+        "fkt": "#009E73",
+        "clkt": "#0072B2",
+        "adaptkt": "#D55E00",
+        "gkt": "#E69F00",
+        "bkt": "#56B4E9",
+        "rasch1pl": "#0072B2",
+        "logisticregression": "#009E73",
+        "tirt": "#D55E00",
+    }
+    palette = sns.color_palette("colorblind", n_colors=3)
+    def color_for(name: str, i: int):
+        key = _sanitize_model_name(name).lower()
+        return fixed_colors.get(key, palette[i % len(palette)])
+
+    # Styles: distinct linestyles + sparse markers to separate close curves
+    markers = ["o", "s", "D"]
+    linestyles = ["solid", "dashed", "dashdot"]
+
+    base = float(np.median(base_vals)) if base_vals else 0.0
+
+    fig, ax = plt.subplots(figsize=(6.8, 6.8))
+    ax.grid(True, color="#d0d0d0", alpha=0.4)
+    ax.hlines(base, 0, 1, colors="gray", linestyles="--", lw=1.2, alpha=0.9, label=f"Class prior (≈ {base:.3f})")
+
+    for i, (name, ap, rec, prec) in enumerate(top3):
+        c = color_for(name, i)
+        ax.plot(
+            rec,
+            prec,
+            color=c,
+            lw=3.0,
+            alpha=1.0,
+            linestyle=linestyles[i % len(linestyles)],
+            marker=markers[i % len(markers)],
+            markersize=5.2,
+            markevery=max(12, len(rec) // 20),
+            markerfacecolor="white",
+            markeredgecolor=c,
+            markeredgewidth=1.4,
+            path_effects=[patheffects.withStroke(linewidth=4.5, foreground="white")],
+            label=f"{_sanitize_model_name(name)} (AP={ap:.3f})",
+        )
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_title("Precision–Recall — Top 3 Models")
+    try:
+        ax.set_aspect("equal", adjustable="box")
+    except Exception:
+        pass
+
+    # Zoomed inset on MIDDLE recall region with stronger magnification
+    try:
+        ins = ax.inset_axes([0.34, 0.12, 0.56, 0.56])
+        ins.grid(True, color="#d0d0d0", alpha=0.3)
+        x0, x1 = 0.52, 0.68
+        ymins, ymaxs = [], []
+        for i, (name, ap, rec, prec) in enumerate(top3):
+            c = color_for(name, i)
+            ins.plot(
+                rec,
+                prec,
+                color=c,
+                lw=2.0,
+                linestyle=linestyles[i % len(linestyles)],
+                marker=markers[i % len(markers)],
+                markersize=4.2,
+                markevery=max(8, len(rec) // 22),
+                markerfacecolor="white",
+                markeredgecolor=c,
+                markeredgewidth=1.0,
+                path_effects=[patheffects.withStroke(linewidth=3.0, foreground="white")],
+            )
+            m = (rec >= x0) & (rec <= x1)
+            if np.any(m):
+                ymins.append(float(np.nanmin(prec[m])))
+                ymaxs.append(float(np.nanmax(prec[m])))
+        ins.set_xlim(x0, x1)
+        if ymins:
+            y0 = max(0.6, min(ymins) - 0.015)
+            y1 = min(1.0, max(ymaxs) + 0.015)
+            ins.set_ylim(y0, y1)
+        ins.tick_params(labelsize=8)
+        try:
+            ax.indicate_inset_zoom(ins, edgecolor="gray")
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=3, fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+    else:
+        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+
+    fig.savefig(outdir / "pr_top3.png", dpi=300, bbox_inches="tight")
+    fig.savefig(outdir / "pr_top3.pdf", bbox_inches="tight")
+    plt.close(fig)
+
+def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
+    """Single square ROC chart with ONLY the top-3 models (by ROC AUC).
+    Thick lines, white stroke, sparse markers removed (clean lines), random baseline.
+    Saves: roc_top3.png / roc_top3.pdf
+    """
+    sns.set(style="whitegrid", context="paper")
+
+    curves = []  # (name, auc, fpr, tpr)
+    for _, row in metrics.iterrows():
+        name = row["model"]
+        try:
+            y_true, y_prob = _load_predictions(config.OUTPUT_DIR, name)
+            if len(y_true) == 0:
+                continue
+            fpr, tpr, _ = roc_curve(y_true, y_prob)
+            auc_val = roc_auc_score(y_true, y_prob)
+            curves.append((name, float(auc_val), fpr, tpr))
+        except Exception as e:
+            print(f"[ROC-top3] Skipping {name}: {e}")
+
+    if not curves:
+        return
+    curves.sort(key=lambda x: -x[1])
+    top3 = curves[:3]
 
     fixed_colors = {
         "dkt": "#CC79A7",
@@ -878,97 +761,97 @@ def plot_pr_all(metrics: pd.DataFrame, outdir: Path):
         "logisticregression": "#009E73",
         "tirt": "#D55E00",
     }
-    palette = sns.color_palette("colorblind", n_colors=max(9, len(curves)))
-    color_by_name: Dict[str, tuple] = {}
-    fb = 0
-    for orig, san, _, _, _ in curves:
-        key = san.lower()
-        if key in fixed_colors:
-            color_by_name[orig] = fixed_colors[key]
-        else:
-            color_by_name[orig] = palette[fb % len(palette)]
-            fb += 1
+    palette = sns.color_palette("colorblind", n_colors=3)
+    def color_for(name: str, i: int):
+        key = _sanitize_model_name(name).lower()
+        return fixed_colors.get(key, palette[i % len(palette)])
 
-    def linestyle_for(name: str) -> str:
-        fam = _family_of_model(name)
-        if fam == "deep":
-            return "solid"
-        if fam == "classical":
-            return "dashed"
-        if fam == "hybrid":
-            return "dotted"
-        if fam == "graph":
-            return "dashdot"
-        return "solid"
+    # Styles for separation when curves are very close
+    markers = ["o", "s", "D"]
+    linestyles = ["solid", "dashed", "dashdot"]
 
-    base = float(np.median(base_vals)) if base_vals else 0.0
+    fig, ax = plt.subplots(figsize=(6.8, 6.8))
+    ax.grid(True, color="#d0d0d0", alpha=0.35)
+    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", lw=1.2, alpha=0.85, label="Random (AUC=0.5)")
 
-    # Two side-by-side square panels
-    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 6.2), sharex=True, sharey=True)
-    axes = np.array(axes).ravel()
+    for i, (name, auc_val, fpr, tpr) in enumerate(top3):
+        c = color_for(name, i)
+        ax.plot(
+            fpr,
+            tpr,
+            color=c,
+            lw=3.0,
+            alpha=1.0,
+            linestyle=linestyles[i % len(linestyles)],
+            marker=markers[i % len(markers)],
+            markersize=5.0,
+            markevery=max(12, len(fpr) // 20),
+            markerfacecolor="white",
+            markeredgecolor=c,
+            markeredgewidth=1.2,
+            path_effects=[patheffects.withStroke(linewidth=4.5, foreground="white")],
+            label=f"{_sanitize_model_name(name)} (AUC={auc_val:.3f})",
+        )
 
-    for ax, (panel_title, mdl_san_list) in zip(axes, group_defs.items()):
-        ax.grid(True, color="#d0d0d0", alpha=0.4)
-        # Baseline: class prior
-        ax.hlines(base, 0, 1, colors="gray", linestyles="--", lw=1.2, alpha=0.9, label=f"Class prior (≈ {base:.3f})")
-        for i, san in enumerate(mdl_san_list):
-            key = key_by_sanitized.get(_sanitize_model_name(san))
-            if not key:
-                continue
-            tup = next((t for t in curves if t[0] == key), None)
-            if tup is None:
-                continue
-            orig, san2, ap, rec, prec = tup
-            ax.plot(
-                rec,
-                prec,
-                color=color_by_name[orig],
-                lw=2.2,
-                alpha=0.98,
-                linestyle=linestyle_for(orig),
-                zorder=5,
-                path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
-                label=f"{san2} (AP={ap:.3f})",
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    ax.set_title("ROC — Top 3 Models")
+    try:
+        ax.set_aspect("equal", adjustable="box")
+    except Exception:
+        pass
+
+    # Zoomed inset on MIDDLE FPR region with stronger magnification
+    try:
+        ins = ax.inset_axes([0.34, 0.12, 0.56, 0.56])
+        ins.grid(True, color="#d0d0d0", alpha=0.3)
+        x0, x1 = 0.40, 0.60
+        ymins, ymaxs = [], []
+        for i, (name, auc_val, fpr, tpr) in enumerate(top3):
+            c = color_for(name, i)
+            ins.plot(
+                fpr,
+                tpr,
+                color=c,
+                lw=2.0,
+                linestyle=linestyles[i % len(linestyles)],
+                marker=markers[i % len(markers)],
+                markersize=3.6,
+                markevery=max(10, len(fpr) // 22),
+                markerfacecolor="white",
+                markeredgecolor=c,
+                markeredgewidth=0.9,
+                path_effects=[patheffects.withStroke(linewidth=3.0, foreground="white")],
             )
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1)
-        ax.set_ylabel("Precision")
-        ax.set_title(f"Precision–Recall — {panel_title}")
+            m = (fpr >= x0) & (fpr <= x1)
+            if np.any(m):
+                ymins.append(float(np.nanmin(tpr[m])))
+                ymaxs.append(float(np.nanmax(tpr[m])))
+        ins.set_xlim(x0, x1)
+        if ymins:
+            y0 = max(0.6, min(ymins) - 0.015)
+            y1 = min(1.0, max(ymaxs) + 0.015)
+            ins.set_ylim(y0, y1)
+        ins.tick_params(labelsize=8)
         try:
-            ax.set_aspect("equal", adjustable="box")
+            ax.indicate_inset_zoom(ins, edgecolor="gray")
         except Exception:
             pass
+    except Exception:
+        pass
 
-    axes[-1].set_xlabel("Recall")
-
-    handles_all: List[object] = []
-    labels_all: List[str] = []
-    for a in axes:
-        h, l = a.get_legend_handles_labels()
-        for hh, ll in zip(h, l):
-            if ll and ll not in labels_all:
-                handles_all.append(hh)
-                labels_all.append(ll)
-    if handles_all:
-        fig.legend(
-            handles_all,
-            labels_all,
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.04),
-            ncol=min(9, len(labels_all)),
-            fontsize=9,
-            frameon=True,
-            title="Models",
-            title_fontsize=9,
-        )
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=3, fontsize=9, frameon=True)
         fig.tight_layout(rect=[0, 0.05, 1, 0.95])
     else:
         fig.tight_layout(rect=[0, 0.05, 1, 0.95])
 
-    fig.savefig(outdir / "pr_all.png", dpi=300, bbox_inches="tight")
-    fig.savefig(outdir / "pr_all.pdf", bbox_inches="tight")
+    fig.savefig(outdir / "roc_top3.png", dpi=300, bbox_inches="tight")
+    fig.savefig(outdir / "roc_top3.pdf", bbox_inches="tight")
     plt.close(fig)
-
 
 def plot_calibration_grid(metrics: pd.DataFrame, outdir: Path):
     sns.set(style="whitegrid", context="paper")
@@ -1160,9 +1043,9 @@ def main():
     if "roc_auc" in metrics.columns:
         metrics = metrics.sort_values("roc_auc", ascending=False, na_position="last").reset_index(drop=True)
 
-    # Summary plots
-    plot_roc_all(metrics, plot_dirs["summary"])  # ROC overlays
-    plot_pr_all(metrics, plot_dirs["summary"])   # PR overlays
+    # Summary plots (Top-3 only)
+    plot_roc_top3(metrics, plot_dirs["summary"])  # ROC top-3 overlay
+    plot_pr_top3(metrics, plot_dirs["summary"])   # PR top-3 overlay
     plot_metric_bars(metrics, plot_dirs["summary"])  # bar charts for metrics
     plot_calibration_grid(metrics, plot_dirs["summary"])  # reliability curves
     plot_confusion_matrices(metrics, plot_dirs["summary"])  # confusion matrices grid
