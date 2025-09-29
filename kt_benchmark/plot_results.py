@@ -350,7 +350,10 @@ def plot_student_trajectories_grouped(
         return
 
     # Define groups (use sanitized keys, then map back to existing model names in preds)
-    # Will split by performance (Top-3 vs Others)
+    group_defs = {
+        "Classical baselines": ["BKT", "Rasch1PL", "LogisticRegression", "TIRT"],
+        "Advanced models": ["DKT", "FKT", "CLKT", "AdaptKT", "GKT"],
+    }
     # map sanitized -> original key present in model_preds
     key_by_sanitized = {_sanitize_model_name(k): k for k in model_preds.keys()}
 
@@ -695,7 +698,11 @@ def plot_roc_all(metrics: pd.DataFrame, outdir: Path):
     """
     sns.set(style="whitegrid", context="paper")
 
-    # We will split models by performance (Top-3 vs Others)
+    # Define groups similar to plot_student_trajectories_grouped()
+    group_defs = {
+        "Classical baselines": ["BKT", "Rasch1PL", "LogisticRegression", "TIRT"],
+        "Advanced models": ["DKT", "FKT", "CLKT", "AdaptKT", "GKT"],
+    }
 
     # Compute curves and AUCs (keep original names and a sanitized key)
     curves: List[Tuple[str, str, float, np.ndarray, np.ndarray]] = []  # (orig, san, auc, fpr, tpr)
@@ -719,24 +726,6 @@ def plot_roc_all(metrics: pd.DataFrame, outdir: Path):
     for orig, san, _, _, _ in curves:
         if san not in key_by_sanitized:
             key_by_sanitized[san] = orig
-
-    # Split into Top-3 by AP and the rest for two panels
-    curves_sorted = sorted(curves, key=lambda t: -t[2])  # t[2] = AP
-    top_curves = curves_sorted[:3]
-    rest_curves = curves_sorted[3:]
-    panels = [
-        ("Top 3 performers", [san for (_, san, _, _, _) in top_curves]),
-        ("Others", [san for (_, san, _, _, _) in rest_curves]),
-    ]
-
-    # Determine Top-3 by AUC
-    curves_sorted = sorted(curves, key=lambda t: -t[2])
-    top_curves = curves_sorted[:3]
-    rest_curves = curves_sorted[3:]
-    panels = [
-        ("Top 3 performers", [san for (_, san, _, _, _) in top_curves]),
-        ("Others", [san for (_, san, _, _, _) in rest_curves]),
-    ]
 
     # Colors and styles (fixed known palette + fallbacks)
     fixed_colors = {
@@ -778,7 +767,7 @@ def plot_roc_all(metrics: pd.DataFrame, outdir: Path):
     axes = np.array(axes).ravel()
 
     # Draw panels
-    for ax, (panel_title, mdl_san_list) in zip(axes, panels):
+    for ax, (panel_title, mdl_san_list) in zip(axes, group_defs.items()):
         ax.grid(True, color="#d0d0d0", alpha=0.35)
         # Baseline
         ax.plot([0, 1], [0, 1], linestyle="--", color="gray", lw=1.2, alpha=0.85, label="Random (AUC=0.5)")
@@ -810,10 +799,6 @@ def plot_roc_all(metrics: pd.DataFrame, outdir: Path):
             ax.set_aspect("equal", adjustable="box")
         except Exception:
             pass
-
-    # If there are no "Others", hide the second axis
-    if len(panels[1][1]) == 0:
-        axes[1].axis("off")
 
     axes[-1].set_xlabel("False Positive Rate")
 
@@ -882,15 +867,6 @@ def plot_pr_all(metrics: pd.DataFrame, outdir: Path):
         if san not in key_by_sanitized:
             key_by_sanitized[san] = orig
 
-    # Define two panels: Top-3 by AP vs Others
-    curves_sorted = sorted(curves, key=lambda t: -t[2])  # sort by AP desc
-    top_curves = curves_sorted[:3]
-    rest_curves = curves_sorted[3:]
-    panels = [
-        ("Top 3 performers", [san for (_, san, _, _, _) in top_curves]),
-        ("Others", [san for (_, san, _, _, _) in rest_curves]),
-    ]
-
     fixed_colors = {
         "dkt": "#CC79A7",
         "fkt": "#009E73",
@@ -931,7 +907,7 @@ def plot_pr_all(metrics: pd.DataFrame, outdir: Path):
     fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(12, 6.2), sharex=True, sharey=True)
     axes = np.array(axes).ravel()
 
-    for ax, (panel_title, mdl_san_list) in zip(axes, panels):
+    for ax, (panel_title, mdl_san_list) in zip(axes, group_defs.items()):
         ax.grid(True, color="#d0d0d0", alpha=0.4)
         # Baseline: class prior
         ax.hlines(base, 0, 1, colors="gray", linestyles="--", lw=1.2, alpha=0.9, label=f"Class prior (≈ {base:.3f})")
@@ -964,9 +940,6 @@ def plot_pr_all(metrics: pd.DataFrame, outdir: Path):
             pass
 
     axes[-1].set_xlabel("Recall")
-
-    if len(panels[1][1]) == 0:
-        axes[1].axis("off")
 
     handles_all: List[object] = []
     labels_all: List[str] = []
