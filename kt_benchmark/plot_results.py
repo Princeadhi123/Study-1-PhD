@@ -461,7 +461,8 @@ def plot_student_trajectories_grouped(
                 markevery=6,
                 zorder=5,
                 path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
-                label=_sanitize_model_name(k) if _sanitize_model_name(k) != "Rasch1PL" else "IRT (Rasch1PL)",
+                # Legend label: just model name (sanitized), no extras
+                label=_sanitize_model_name(k),
             )
         ax.set_ylim(0, 1)
         ax.set_ylabel("p(correct)")
@@ -484,17 +485,35 @@ def plot_student_trajectories_grouped(
     else:
         sid0 = top_students[0]
     fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(12, 6.2), sharex=True)
-    _plot_panel(axes[0], sid0, f"Student {sid0} — Classical baselines", group_defs["Classical baselines"])
-    _plot_panel(axes[1], sid0, f"Student {sid0} — Advanced models", group_defs["Advanced models"])
+    # Panel titles list actual models used in that panel (sanitized names)
+    panel1_models = [m for m in group_defs["Classical baselines"] if m in key_by_sanitized]
+    panel2_models = [m for m in group_defs["Advanced models"] if m in key_by_sanitized]
+    title1 = f"Student {sid0} — " + ", ".join(panel1_models) if panel1_models else f"Student {sid0}"
+    title2 = f"Student {sid0} — " + ", ".join(panel2_models) if panel2_models else f"Student {sid0}"
+    _plot_panel(axes[0], sid0, title1, group_defs["Classical baselines"])
+    _plot_panel(axes[1], sid0, title2, group_defs["Advanced models"])
     axes[-1].set_xlabel("Interaction order")
     # Legend outside bottom (combine from last panel)
-    handles, labels = axes[1].get_legend_handles_labels()
-    if handles:
-        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(6, len(labels)), fontsize=9, frameon=True)
+    # Collect labels from both panels to avoid missing ones
+    h1, l1 = axes[0].get_legend_handles_labels()
+    h2, l2 = axes[1].get_legend_handles_labels()
+    handles = h1 + h2
+    labels = l1 + l2
+    # Deduplicate preserving order
+    seen = set()
+    handles_dedup = []
+    labels_dedup = []
+    for h, l in zip(handles, labels):
+        if l and l not in seen:
+            seen.add(l)
+            handles_dedup.append(h)
+            labels_dedup.append(l)
+    if handles_dedup:
+        fig.legend(handles_dedup, labels_dedup, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(9, len(labels_dedup)), fontsize=9, frameon=True)
         fig.tight_layout(rect=[0, 0.05, 1, 0.95])
     else:
         fig.tight_layout(rect=[0, 0.05, 1, 0.95])
-    fig.suptitle("Student Trajectories — Grouped by Model Family", y=0.99)
+    # No suptitle per request (remove 'Grouped by Model Family')
     fig.savefig(outdir / "trajectories_grouped_single_student.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "trajectories_grouped_single_student.pdf", bbox_inches="tight")
     plt.close(fig)
