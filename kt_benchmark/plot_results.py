@@ -669,7 +669,6 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
     ax.set_ylim(0, 1)
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
-    ax.set_title("Precision–Recall — Top 3 Models")
     try:
         ax.set_aspect("equal", adjustable="box")
     except Exception:
@@ -797,7 +796,6 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
     ax.set_ylim(0, 1)
     ax.set_xlabel("False Positive Rate")
     ax.set_ylabel("True Positive Rate")
-    ax.set_title("ROC — Top 3 Models")
     try:
         ax.set_aspect("equal", adjustable="box")
     except Exception:
@@ -954,7 +952,6 @@ def plot_confusion_matrices(metrics: pd.DataFrame, outdir: Path):
 
     # Shared legend and title
     fig.legend(handles=patches, loc="lower center", ncol=4, title="Cells", title_fontsize=9, fontsize=8)
-    fig.suptitle("Confusion Matrices (threshold chosen by max F1)", y=0.995)
     fig.tight_layout(rect=[0, 0.05, 1, 0.96])
     fig.savefig(outdir / "confusion_matrices.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "confusion_matrices.pdf", bbox_inches="tight")
