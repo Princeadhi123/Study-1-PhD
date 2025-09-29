@@ -106,6 +106,21 @@ def save_predictions(outdir: Path, tag: str, result: Dict[str, Any]):
             df.insert(0, "df_row_index", np.asarray(idx[:L], dtype=int))
     df.to_csv(outdir / f"preds_{tag}.csv", index=False)
 
+    # Optional: viz-only predictions spanning all test rows (when provided by the model)
+    if all(k in result for k in ("y_true_viz", "y_prob_viz", "test_rows_viz")):
+        try:
+            y_true_v = np.asarray(result["y_true_viz"])  # type: ignore
+            y_prob_v = np.asarray(result["y_prob_viz"])  # type: ignore
+            idx_v = np.asarray(result["test_rows_viz"])  # type: ignore
+            df_v = pd.DataFrame({
+                "df_row_index": idx_v.astype(int).ravel()[: min(len(idx_v), len(y_true_v), len(y_prob_v))],
+                "y_true": y_true_v.ravel()[: min(len(idx_v), len(y_true_v), len(y_prob_v))],
+                "y_prob": y_prob_v.ravel()[: min(len(idx_v), len(y_true_v), len(y_prob_v))],
+            })
+            df_v.to_csv(outdir / f"preds_{tag}__viz.csv", index=False)
+        except Exception:
+            pass
+
 
 def main():
     outdir = ensure_outdir()

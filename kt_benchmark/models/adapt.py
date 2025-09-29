@@ -155,12 +155,21 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     )
     clf.fit(Xs_aligned, y_s)
 
-    # Evaluate on aligned target eval rows
+    # Evaluate on aligned target eval rows (metrics file)
     X_eval = X_all.iloc[tgt_rows_eval].values.astype(np.float64)
     X_eval = std.transform(X_eval)
     X_eval = _coral_transform(X_eval, params)
     y_prob = clf.predict_proba(X_eval)[:, 1]
     y_true = y_all.iloc[tgt_rows_eval].astype(int).values
+
+    # Additional: VIZ predictions spanning ALL binary-labeled test rows (not only target groups)
+    # These are saved separately and used only for visualization so trajectories don't end mid-sequence.
+    test_rows_all_bin = np.intersect1d(np.where(mask_bin)[0], test_idx)
+    X_test_all = X_all.iloc[test_rows_all_bin].values.astype(np.float64)
+    X_test_all = std.transform(X_test_all)
+    X_test_all = _coral_transform(X_test_all, params)
+    y_prob_viz = clf.predict_proba(X_test_all)[:, 1]
+    y_true_viz = y_all.iloc[test_rows_all_bin].astype(int).values
 
     return {
         "category": "Domain Adaptive",
@@ -172,4 +181,8 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "domain_target_groups": tgt_groups,
         "test_rows": tgt_rows_eval,
         "chosen_C": float(best_C) if best_C is not None else 1.0,
+        # viz-only outputs (for plotting coverage across all test rows)
+        "y_true_viz": y_true_viz,
+        "y_prob_viz": y_prob_viz,
+        "test_rows_viz": test_rows_all_bin,
     }

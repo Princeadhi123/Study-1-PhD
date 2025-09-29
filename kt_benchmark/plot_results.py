@@ -86,12 +86,16 @@ def _load_predictions(outdir: Path, model_name: str) -> Tuple[np.ndarray, np.nda
 def _load_predictions_with_index(outdir: Path, model_name: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load predictions and optional original row indices if present."""
     tag = name_to_tag(model_name)
-    p = outdir / f"preds_{tag}.csv"
+    # Prefer the viz file if present for fuller coverage in visualizations
+    p_viz = outdir / f"preds_{tag}__viz.csv"
+    p = p_viz if p_viz.exists() else (outdir / f"preds_{tag}.csv")
     if not p.exists():
         candidates = list(outdir.glob(f"preds_{tag}*.csv"))
         if not candidates:
             raise FileNotFoundError(f"No prediction file for model '{model_name}' (expected {p})")
-        p = candidates[0]
+        # Prefer a candidate ending with __viz if available
+        viz_candidates = [c for c in candidates if c.name.endswith("__viz.csv")]
+        p = viz_candidates[0] if viz_candidates else candidates[0]
     df = pd.read_csv(p)
     y_true = pd.to_numeric(df.get("y_true"), errors="coerce").to_numpy()
     y_prob = pd.to_numeric(df.get("y_prob"), errors="coerce").to_numpy()
@@ -289,6 +293,245 @@ def plot_student_trajectories_all_models(
     fig.savefig(outdir / "trajectories_all_models.pdf", bbox_inches="tight")
     plt.close(fig)
 
+
+def _family_of_model(name: str) -> str:
+    n = _sanitize_model_name(name).lower()
+    if n in {"dkt", "fkt"}:
+        return "deep"
+    if n in {"bkt", "rasch1pl", "tirt", "logisticregression"}:
+        return "classical"
+    if n in {"clkt", "adaptkt"}:
+        return "hybrid"
+    if n in {"gkt"}:
+        return "graph"
+    return "other"
+
+
+def plot_student_trajectories_grouped(
+    metrics: pd.DataFrame,
+    outdir: Path,
+    max_students: int = 4,
+    min_len: int = 20,
+    max_len: int = 60,
+):
+    """
+    Plot less cluttered trajectories by splitting models into two panels:
+      Panel A: classical baselines (BKT, Rasch1PL, LogisticRegression, TIRT)
+      Panel B: advanced models (DKT, FKT, CLKT, AdaptKT, GKT)
+    Also: larger ground-truth dots and light-grey shading for incorrect answers.
+    Produces two figures:
+      (1) grouped_single_student: two stacked panels for the best-covered student
+      (2) grouped_multi_students_[classical|advanced]: 2x2 grid (up to 4 students) per panel
+    """
+    df = add_time_index(load_itemwise_df())
+    if config.COL_ID not in df.columns or config.COL_ORDER not in df.columns:
+        return
+    model_preds = _collect_model_predictions_with_dfrows(metrics)
+    if not model_preds:
+        return
+
+    # Maps from df rows to (student, order)
+    id_map = df[config.COL_ID].astype(str)
+    order_map = df[config.COL_ORDER]
+
+    # Candidate students by length
+    sizes = df.groupby(df[config.COL_ID].astype(str))[config.COL_ID].size()
+    allowed = set(sizes[(sizes >= min_len) & (sizes <= max_len)].index.astype(str).tolist())
+
+    # Coverage-based selection
+    sid_counts: Dict[str, int] = {}
+    for m in model_preds.values():
+        sids = id_map.loc[m["rows"]].astype(str)
+        for s in sids:
+            if s in allowed:
+                sid_counts[s] = sid_counts.get(s, 0) + 1
+    top_students = [s for s, _ in sorted(sid_counts.items(), key=lambda x: -x[1])][:max_students]
+    if not top_students:
+        return
+
+    # Define groups (use sanitized keys, then map back to existing model names in preds)
+    group_defs = {
+        "Classical baselines": ["BKT", "Rasch1PL", "LogisticRegression", "TIRT"],
+        "Advanced models": ["DKT", "FKT", "CLKT", "AdaptKT", "GKT"],
+    }
+    # map sanitized -> original key present in model_preds
+    key_by_sanitized = {_sanitize_model_name(k): k for k in model_preds.keys()}
+
+    # Colors and styles
+    # Fixed high-contrast colors per model (sanitized key, lowercase)
+    fixed_colors = {
+        "dkt": "#CC79A7",       # magenta
+        "fkt": "#009E73",       # green
+        "clkt": "#0072B2",      # blue
+        "adaptkt": "#D55E00",   # dark orange (high contrast)
+        "gkt": "#E69F00",       # orange/yellow
+        "bkt": "#56B4E9",       # light blue
+        "rasch1pl": "#0072B2",  # blue (labelled as IRT)
+        "logisticregression": "#009E73",  # green
+        "tirt": "#D55E00",      # dark orange
+    }
+    # Fallback palette for any extra models
+    all_models_ordered = [k for k in model_preds.keys()]  # preserve metric sort order
+    palette = sns.color_palette("colorblind", n_colors=max(8, len(all_models_ordered)))
+    color_by_model = {}
+    for i, k in enumerate(all_models_ordered):
+        key = _sanitize_model_name(k).lower()
+        color_by_model[k] = fixed_colors.get(key, palette[i % len(palette)])
+
+    def linestyle_for(name: str) -> str:
+        fam = _family_of_model(name)
+        if fam == "deep":
+            return "solid"
+        if fam == "classical":
+            return "dashed"
+        if fam == "hybrid":
+            return "dotted"
+        if fam == "graph":
+            return "dashdot"
+        return "solid"
+
+    markers = ["D", "o", "s", "^", "v", "P", "X", "<", ">"]
+
+    def _plot_panel(ax: plt.Axes, sid: str, panel_name: str, mdl_sanitized_list: List[str]):
+        # pick models present
+        mdl_keys = [key_by_sanitized[m] for m in mdl_sanitized_list if m in key_by_sanitized]
+        if not mdl_keys:
+            ax.axis("off")
+            return
+        # Ground-truth: union of test rows across these models for this student
+        rows_union_list = []
+        for k in mdl_keys:
+            data = model_preds[k]
+            mask_sid = id_map.loc[data["rows"]].astype(str).values == sid
+            if mask_sid.any():
+                rows_union_list.append(data["rows"][mask_sid])
+        if rows_union_list:
+            rows_union = np.unique(np.concatenate(rows_union_list))
+            ords = order_map.loc[rows_union].to_numpy()
+            args = np.argsort(ords)
+            rows_union = rows_union[args]
+            ords = ords[args]
+            gt_vals = pd.to_numeric(df.loc[rows_union, config.COL_RESP], errors="coerce").to_numpy()
+            # Shade incorrect (0) bands lightly
+            if len(ords) > 0:
+                for o, g in zip(ords, gt_vals):
+                    if g == 0:
+                        ax.axvspan(float(o) - 0.5, float(o) + 0.5, color="#000000", alpha=0.08, zorder=0)
+            m = np.isin(gt_vals, [0, 1]) & np.isfinite(ords)
+            ax.scatter(
+                ords[m],
+                gt_vals[m].astype(int),
+                s=48,  # slightly larger
+                c="black",
+                edgecolors="white",
+                linewidths=0.7,
+                zorder=4,
+                label="Ground truth",
+            )
+        # Model lines
+        # Debug: print coverage counts per model in this panel
+        try:
+            cov_summary = { _sanitize_model_name(k): int((id_map.loc[model_preds[k]["rows"]].astype(str).values == sid).sum()) for k in mdl_keys }
+            print(f"[Traj Grouped] Student {sid} coverage in '{panel_name}': {cov_summary}")
+        except Exception:
+            pass
+
+        for i, k in enumerate(mdl_keys):
+            data = model_preds[k]
+            mask_sid = id_map.loc[data["rows"]].astype(str).values == sid
+            if not mask_sid.any():
+                continue
+            rows_sid = data["rows"][mask_sid]
+            ord_sid = order_map.loc[rows_sid].to_numpy()
+            args = np.argsort(ord_sid)
+            ord_sid = ord_sid[args]
+            yp = data["y_prob"][mask_sid][args]
+            ax.plot(
+                ord_sid,
+                yp,
+                color=color_by_model.get(k, palette[i % len(palette)]),
+                lw=2.2,
+                alpha=0.98,
+                linestyle=linestyle_for(k),
+                marker=markers[i % len(markers)],
+                markerfacecolor="white",
+                markeredgecolor=color_by_model.get(k, palette[i % len(palette)]),
+                markeredgewidth=1.0,
+                markersize=(6 if _sanitize_model_name(k).lower()=="adaptkt" else 5),
+                markevery=6,
+                zorder=5,
+                path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
+                label=_sanitize_model_name(k) if _sanitize_model_name(k) != "Rasch1PL" else "IRT (Rasch1PL)",
+            )
+        ax.set_ylim(0, 1)
+        ax.set_ylabel("p(correct)")
+        ax.grid(True, alpha=0.25)
+        ax.margins(x=0.02)
+        ax.set_title(f"{panel_name}")
+
+    # Figure 1: single student with two panels (prefer a student with AdaptKT coverage)
+    adv_key = key_by_sanitized.get("adaptkt")
+    if adv_key in model_preds:
+        has_adapt = []
+        for s in top_students:
+            try:
+                cnt = int((id_map.loc[model_preds[adv_key]["rows"]].astype(str).values == s).sum())
+            except Exception:
+                cnt = 0
+            if cnt > 0:
+                has_adapt.append((s, cnt))
+        sid0 = has_adapt[0][0] if has_adapt else top_students[0]
+    else:
+        sid0 = top_students[0]
+    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(12, 6.2), sharex=True)
+    _plot_panel(axes[0], sid0, f"Student {sid0} — Classical baselines", group_defs["Classical baselines"])
+    _plot_panel(axes[1], sid0, f"Student {sid0} — Advanced models", group_defs["Advanced models"])
+    axes[-1].set_xlabel("Interaction order")
+    # Legend outside bottom (combine from last panel)
+    handles, labels = axes[1].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(6, len(labels)), fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+    else:
+        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+    fig.suptitle("Student Trajectories — Grouped by Model Family", y=0.99)
+    fig.savefig(outdir / "trajectories_grouped_single_student.png", dpi=300, bbox_inches="tight")
+    fig.savefig(outdir / "trajectories_grouped_single_student.pdf", bbox_inches="tight")
+    plt.close(fig)
+
+    # Figures 2 & 3: multi-student grids, one per panel
+    def _plot_grid(panel_key: str, filename_stub: str):
+        n = len(top_students)
+        n = min(n, max_students)
+        ncols = 2
+        nrows = int(np.ceil(n / ncols))
+        fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(12, 2.8 * nrows), sharex=False)
+        axes = np.array(axes).reshape(nrows, ncols)
+        for i in range(n):
+            r = i // ncols
+            c = i % ncols
+            ax = axes[r, c]
+            sid = top_students[i]
+            _plot_panel(ax, sid, f"Student {sid}", group_defs[panel_key])
+        # remove unused axes
+        for j in range(n, nrows * ncols):
+            r = j // ncols
+            c = j % ncols
+            fig.delaxes(axes[r, c])
+        axes[min(n - 1, nrows * ncols - 1)].set_xlabel("Interaction order")
+        handles, labels = axes[0, 0].get_legend_handles_labels()
+        if handles:
+            fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(6, len(labels)), fontsize=9, frameon=True)
+            fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        else:
+            fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.suptitle(f"Trajectories — {panel_key}", y=0.99)
+        fig.savefig(outdir / f"trajectories_grouped_multi_students__{filename_stub}.png", dpi=300, bbox_inches="tight")
+        fig.savefig(outdir / f"trajectories_grouped_multi_students__{filename_stub}.pdf", bbox_inches="tight")
+        plt.close(fig)
+
+    _plot_grid("Classical baselines", "classical")
+    _plot_grid("Advanced models", "advanced")
 
 def plot_prediction_heatmaps(
     metrics: pd.DataFrame,
@@ -690,6 +933,18 @@ def main():
         )
     except Exception as e:
         print(f"[Trajectories] Skipped: {e}")
+
+    # Grouped trajectories (classical vs advanced) to reduce clutter
+    try:
+        plot_student_trajectories_grouped(
+            metrics,
+            plot_dirs["summary"],
+            max_students=4,
+            min_len=20,
+            max_len=60,
+        )
+    except Exception as e:
+        print(f"[Grouped Trajectories] Skipped: {e}")
 
     print("Saved plots to:", plot_dirs["base"].resolve())
 
