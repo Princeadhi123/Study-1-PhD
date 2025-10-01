@@ -1137,35 +1137,231 @@ def plot_confusion_matrices(metrics: pd.DataFrame, outdir: Path):
 
 def plot_metric_bars(metrics: pd.DataFrame, outdir: Path):
     sns.set(style="whitegrid", context="paper")
+    # Removed Brier at user's request; keep five metrics
     metric_cols = [
         ("roc_auc", "ROC AUC (↑)"),
         ("accuracy", "Accuracy (↑)"),
         ("avg_precision", "Average Precision (↑)"),
         ("f1", "F1 (↑)"),
-        ("brier", "Brier (↓)"),
         ("log_loss", "Log Loss (↓)"),
     ]
-    fig, axes = plt.subplots(nrows=2, ncols=3, figsize=(10, 6))
-    axes = np.array(axes).reshape(2, 3)
-    for (col, title), ax in zip(metric_cols, axes.ravel()):
+    # Dynamic grid (3 columns)
+    n = len(metric_cols)
+    ncols = 3
+    nrows = int(np.ceil(n / ncols))
+    fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(10, 3.0 * nrows))
+    axes = np.array(axes).reshape(nrows, ncols)
+    for idx, ((col, title)) in enumerate(metric_cols):
+        r, c = divmod(idx, ncols)
+        ax = axes[r, c]
         if col not in metrics.columns:
             ax.axis("off")
             continue
         df = metrics[["model", col]].copy()
-        df = df.sort_values(col, ascending=(col in {"brier", "log_loss"}))
-        sns.barplot(data=df, x=col, y="model", ax=ax, palette="viridis")
+        df = df.sort_values(col, ascending=(col in {"log_loss"}))
+        # Display names on y-axis
+        df["model_disp"] = df["model"].apply(_display_model_name)
+        sns.barplot(data=df, x=col, y="model_disp", ax=ax, palette="viridis")
         ax.set_title(title)
         ax.set_xlabel("")
         ax.set_ylabel("")
         # annotate values
         for i, v in enumerate(df[col].values):
             ax.text(v, i, f" {v:.3f}", va="center", fontsize=8)
+    # Hide any remaining empty axes
+    for j in range(n, nrows * ncols):
+        r, c = divmod(j, ncols)
+        fig.delaxes(axes[r, c])
     fig.suptitle("Model Comparison on Test Metrics", y=0.995)
     fig.tight_layout()
     fig.savefig(outdir / "metric_bars.png", dpi=300)
     fig.savefig(outdir / "metric_bars.pdf")
     plt.close(fig)
 
+
+def plot_metric_radar_ranks(metrics: pd.DataFrame, outdir: Path):
+    """
+    Build ranks (positions) per model over five metrics and plot a radar chart.
+    Metrics used (higher-better except log_loss):
+      - accuracy, roc_auc, avg_precision, f1, log_loss
+    Saves:
+      - metric_radar_ranks.[png|pdf]
+      - metric_rank_summary.csv (with per-metric rank and total_rank)
+    """
+    sns.set(style="whitegrid", context="paper")
+    metric_defs = [
+        ("accuracy", True, "Accuracy"),
+        ("roc_auc", True, "ROC AUC"),
+        ("avg_precision", True, "Average Precision"),
+        ("f1", True, "F1"),
+        ("log_loss", False, "Log Loss"),
+    ]
+    # Filter to available metrics
+    metric_defs = [(c, up, lbl) for (c, up, lbl) in metric_defs if c in metrics.columns]
+    if not metric_defs:
+        return
+    models = metrics["model"].tolist()
+    M = len(models)
+    # Compute ranks per metric
+    ranks = pd.DataFrame(index=models)
+    for col, higher_better, label in metric_defs:
+        s = metrics.set_index("model")[col].copy()
+        # NaNs -> worst (assign max rank)
+        s_filled = s.copy()
+        if higher_better:
+            order = s_filled.rank(ascending=False, method="min")
+        else:
+            order = s_filled.rank(ascending=True, method="min")
+        # Any NaNs rank to worst
+        order = order.fillna(M)
+        ranks[col] = order.astype(int)
+    ranks["total_rank"] = ranks.sum(axis=1)
+    # Derive scores so best gets M and worst gets 1
+    scores = ranks.drop(columns=["total_rank"]).apply(lambda col: (M - col + 1))
+    scores = scores.astype(int)
+    scores["total_score"] = scores.sum(axis=1)
+    # Save summary CSV with both ranks and scores, plus display names
+    out_csv = outdir / "metric_rank_summary.csv"
+    disp = pd.DataFrame({"model": models, "model_display": [ _display_model_name(m) for m in models ]}).set_index("model")
+    # Interleave columns: metric_rank, then metric_score
+    cols_order = []
+    for col, _, _ in metric_defs:
+        if col in ranks.columns:
+            cols_order.append(col)  # rank
+        if col in scores.columns:
+            cols_order.append(f"{col}_score")
+            scores.rename(columns={col: f"{col}_score"}, inplace=True)
+    merged = disp.join([ranks, scores])
+    # Reorder columns to desired order + totals
+    ordered_cols = ["model_display"] + cols_order + ["total_rank", "total_score"]
+    merged = merged.reindex(columns=ordered_cols)
+    merged = merged.sort_values("total_score", ascending=False)
+    merged.to_csv(out_csv, index=True)
+
+    # Radar plot uses rank (1=best). Convert to score so outward is better
+    # Higher score = (M - rank + 1)
+    theta_labels = [lbl for _, _, lbl in metric_defs]
+    K = len(metric_defs)
+    angles = np.linspace(0, 2 * np.pi, K, endpoint=False).tolist()
+    angles += angles[:1]  # close loop
+
+    # Color mapping consistent with other plots
+    fixed_colors = {
+        "dkt": "#CC79A7", "fkt": "#009E73", "clkt": "#0072B2", "adaptkt": "#D55E00",
+        "gkt": "#E69F00", "bkt": "#56B4E9", "rasch1pl": "#0072B2", "logisticregression": "#009E73", "tirt": "#D55E00",
+    }
+    palette = sns.color_palette("colorblind", n_colors=max(9, M))
+    def color_for(name: str, i: int):
+        key = _sanitize_model_name(name).lower()
+        return fixed_colors.get(key, palette[i % len(palette)])
+
+    def linestyle_for(name: str) -> str:
+        fam = _family_of_model(name)
+        if fam == "deep":
+            return "solid"
+        if fam == "classical":
+            return "dashed"
+        if fam == "hybrid":
+            return "dotted"
+        if fam == "graph":
+            return "dashdot"
+        return "solid"
+
+    fig, ax = plt.subplots(figsize=(7.2, 7.2), subplot_kw=dict(polar=True))
+    ax.set_theta_offset(np.pi / 2)
+    ax.set_theta_direction(-1)
+    # Grid and labels
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(theta_labels)
+    ax.set_yticks(range(1, M + 1))
+    ax.set_yticklabels([str(r) for r in range(1, M + 1)])
+    ax.set_ylim(1, M)
+    ax.yaxis.grid(True, color="#d0d0d0", alpha=0.35)
+    ax.xaxis.grid(True, color="#d0d0d0", alpha=0.35)
+
+    # Plot each model
+    for i, m in enumerate(models):
+        r = []
+        for col, _, _ in metric_defs:
+            rk = int(ranks.loc[m, col])
+            score = M - rk + 1  # outward is better
+            r.append(score)
+        r += r[:1]
+        c = color_for(m, i)
+        ax.plot(angles, r, color=c, lw=2.0, linestyle=linestyle_for(m), label=_display_model_name(m),
+                path_effects=[patheffects.withStroke(linewidth=3.2, foreground="white")])
+        ax.fill(angles, r, color=c, alpha=0.06)
+
+    handles, labels = ax.get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=4, fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.05, 1, 0.98])
+    else:
+        fig.tight_layout(rect=[0, 0.05, 1, 0.98])
+    fig.savefig(outdir / "metric_radar_ranks.png", dpi=300, bbox_inches="tight")
+    fig.savefig(outdir / "metric_radar_ranks.pdf", bbox_inches="tight")
+    plt.close(fig)
+
+
+def plot_metric_overall_rank_bars(metrics: pd.DataFrame, outdir: Path):
+    """
+    Plot a horizontal bar chart of overall ranks (sum of positions across
+    Accuracy, ROC AUC, Average Precision, F1, Log Loss). Lower is better.
+    Saves: metric_rank_overall.[png|pdf]
+    """
+    sns.set(style="whitegrid", context="paper")
+    metric_defs = [
+        ("accuracy", True),
+        ("roc_auc", True),
+        ("avg_precision", True),
+        ("f1", True),
+        ("log_loss", False),
+    ]
+    metric_cols = [c for c, _ in metric_defs if c in metrics.columns]
+    if not metric_cols:
+        return
+    models = metrics["model"].tolist()
+    M = len(models)
+    # Compute ranks and scores per metric as in radar
+    ranks = pd.DataFrame(index=models)
+    for col, higher_better in [(c, up) for (c, up) in metric_defs if c in metric_cols]:
+        s = metrics.set_index("model")[col].copy()
+        order = s.rank(ascending=not higher_better, method="min")
+        order = order.fillna(M)
+        ranks[col] = order.astype(int)
+    # Scores: best=M, worst=1
+    scores = ranks.apply(lambda col: (M - col + 1))
+    scores = scores.astype(int)
+    scores["total_score"] = scores.sum(axis=1)
+    df = scores.reset_index().rename(columns={"index": "model"})
+    df["model_display"] = df["model"].apply(_display_model_name)
+    df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
+
+    # Colors consistent with other plots
+    fixed_colors = {
+        "dkt": "#CC79A7", "fkt": "#009E73", "clkt": "#0072B2", "adaptkt": "#D55E00",
+        "gkt": "#E69F00", "bkt": "#56B4E9", "rasch1pl": "#0072B2", "logisticregression": "#009E73", "tirt": "#D55E00",
+    }
+    palette = sns.color_palette("colorblind", n_colors=max(9, len(df)))
+    def color_for(name: str, i: int):
+        key = _sanitize_model_name(name).lower()
+        return fixed_colors.get(key, palette[i % len(palette)])
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.8))
+    y = np.arange(len(df))
+    colors = [color_for(n, i) for i, n in enumerate(df["model"].tolist())]
+    ax.barh(y, df["total_score"].values, color=colors, edgecolor="white")
+    ax.set_yticks(y, labels=df["model_display"].tolist())
+    ax.invert_yaxis()  # best (lowest total rank) at top
+    ax.set_xlabel("Sum of scores (higher is better)")
+    ax.set_title("Overall Score across Accuracy, ROC AUC, AP, F1, Log Loss")
+    # Annotate total rank values
+    for yi, val in zip(y, df["total_score"].values):
+        ax.text(val + 0.2, yi, f"{int(val)}", va="center", fontsize=9)
+    fig.tight_layout()
+    fig.savefig(outdir / "metric_rank_overall.png", dpi=300, bbox_inches="tight")
+    fig.savefig(outdir / "metric_rank_overall.pdf", bbox_inches="tight")
+    plt.close(fig)
 
 def plot_per_model(metrics: pd.DataFrame, outdir: Path):
     sns.set(style="whitegrid", context="paper")
@@ -1220,7 +1416,9 @@ def main():
     # Summary plots (Top-3 only)
     plot_roc_top3(metrics, plot_dirs["summary"])  # ROC top-3 overlay
     plot_pr_top3(metrics, plot_dirs["summary"])   # PR top-3 overlay
-    plot_metric_bars(metrics, plot_dirs["summary"])  # bar charts for metrics
+    plot_metric_bars(metrics, plot_dirs["summary"])  # bar charts for metrics (no Brier)
+    plot_metric_radar_ranks(metrics, plot_dirs["summary"])  # radar ranks + CSV summary
+    plot_metric_overall_rank_bars(metrics, plot_dirs["summary"])  # overall rank bars
     plot_calibration_grid(metrics, plot_dirs["summary"])  # reliability curves
     plot_confusion_matrices(metrics, plot_dirs["summary"])  # confusion matrices grid
 
