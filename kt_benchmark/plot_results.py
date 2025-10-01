@@ -48,6 +48,18 @@ def _sanitize_model_name(name: str) -> str:
     return s
 
 
+def _display_model_name(name: str) -> str:
+    """Short, presentation-friendly model display names.
+    Currently maps 'LogisticRegression' -> 'LR'. Falls back to sanitized name.
+    """
+    s = _sanitize_model_name(name)
+    key = s.lower()
+    mapping = {
+        "logisticregression": "LR",
+    }
+    return mapping.get(key, s)
+
+
 def _ensure_plot_dirs(base: Path) -> Dict[str, Path]:
     plots_dir = base / "plots"
     per_model_dir = plots_dir / "per_model"
@@ -266,7 +278,7 @@ def plot_student_trajectories_all_models(
                 markeredgecolor=color_by_model[mdl],
                 markeredgewidth=0.9,
                 path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
-                label=mdl,
+                label=_display_model_name(mdl),
             )
         ax.set_ylim(0, 1)
         ax.set_ylabel("p(correct)")
@@ -463,7 +475,7 @@ def plot_student_trajectories_grouped(
                 zorder=5,
                 path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
                 # Legend label: just model name (sanitized), no extras
-                label=_sanitize_model_name(k),
+                label=_display_model_name(k),
             )
         ax.set_ylim(0, 1)
         ax.set_ylabel("p(correct)")
@@ -486,11 +498,13 @@ def plot_student_trajectories_grouped(
     else:
         sid0 = top_students[0]
     fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(12, 6.2), sharex=True)
-    # Panel titles list actual models used in that panel (sanitized names)
+    # Panel titles show display names for models actually present in that panel
     panel1_models = [m for m in group_defs["Classical baselines"] if m in key_by_sanitized]
     panel2_models = [m for m in group_defs["Advanced models"] if m in key_by_sanitized]
-    title1 = f"Student {sid0} — " + ", ".join(panel1_models) if panel1_models else f"Student {sid0}"
-    title2 = f"Student {sid0} — " + ", ".join(panel2_models) if panel2_models else f"Student {sid0}"
+    panel1_disp = [_display_model_name(m) for m in panel1_models]
+    panel2_disp = [_display_model_name(m) for m in panel2_models]
+    title1 = f"Student {sid0} — " + ", ".join(panel1_disp) if panel1_disp else f"Student {sid0}"
+    title2 = f"Student {sid0} — " + ", ".join(panel2_disp) if panel2_disp else f"Student {sid0}"
     _plot_panel(axes[0], sid0, title1, group_defs["Classical baselines"])
     _plot_panel(axes[1], sid0, title2, group_defs["Advanced models"])
     axes[-1].set_xlabel("Interaction order")
@@ -553,6 +567,169 @@ def plot_student_trajectories_grouped(
     _plot_grid("Classical baselines", "classical")
     _plot_grid("Advanced models", "advanced")
 
+
+def plot_student_trajectories_best_vs_worst(
+    metrics: pd.DataFrame,
+    outdir: Path,
+    by_metric: str = "accuracy",
+    min_len: int = 20,
+    max_len: int = 60,
+):
+    """
+    Single-student, two-panel trajectories:
+      Top panel: best 3 models by `by_metric` present in predictions with row indices
+      Bottom panel: worst 3 models by `by_metric`
+    Saves: trajectories_best_vs_worst_single_student.[png|pdf]
+    """
+    df = add_time_index(load_itemwise_df())
+    if config.COL_ID not in df.columns or config.COL_ORDER not in df.columns:
+        return
+    model_preds = _collect_model_predictions_with_dfrows(metrics)
+    if not model_preds:
+        return
+
+    # Ensure metric exists; fallback to 'ap' if missing
+    metric_col = by_metric if by_metric in metrics.columns else ("ap" if "ap" in metrics.columns else None)
+    if metric_col is None:
+        return
+
+    # Only consider models we have rows for
+    metr_filt = metrics[metrics["model"].isin(model_preds.keys())].copy()
+    if metr_filt.empty:
+        return
+
+    # Rank and pick top3 / bottom3
+    metr_filt = metr_filt.sort_values(metric_col, ascending=False)
+    best3 = [row["model"] for _, row in metr_filt.head(3).iterrows()]
+    worst3 = [row["model"] for _, row in metr_filt.tail(3).iterrows()]
+
+    # Maps for alignment
+    id_map = df[config.COL_ID].astype(str)
+    order_map = df[config.COL_ORDER]
+
+    # Candidate students by length and coverage in at least one of best3 models
+    sizes = df.groupby(df[config.COL_ID].astype(str))[config.COL_ID].size()
+    allowed = set(sizes[(sizes >= min_len) & (sizes <= max_len)].index.astype(str).tolist())
+    coverage: Dict[str, int] = {}
+    for m in best3:
+        data = model_preds.get(m)
+        if data is None:
+            continue
+        sids = id_map.loc[data["rows"]].astype(str)
+        for s in sids:
+            if s in allowed:
+                coverage[s] = coverage.get(s, 0) + 1
+    if not coverage:
+        return
+    sid0 = max(coverage.items(), key=lambda x: x[1])[0]
+
+    # Colors: reuse fixed mapping from grouped trajectories
+    fixed_colors = {
+        "dkt": "#CC79A7", "fkt": "#009E73", "clkt": "#0072B2", "adaptkt": "#D55E00",
+        "gkt": "#E69F00", "bkt": "#56B4E9", "rasch1pl": "#0072B2", "logisticregression": "#009E73", "tirt": "#D55E00",
+    }
+    all_models = best3 + [m for m in worst3 if m not in best3]
+    palette = sns.color_palette("colorblind", n_colors=max(6, len(all_models)))
+    def color_for(name: str, i: int) -> tuple:
+        key = _sanitize_model_name(name).lower()
+        return fixed_colors.get(key, palette[i % len(palette)])
+
+    def linestyle_for(name: str) -> str:
+        fam = _family_of_model(name)
+        if fam == "deep":
+            return "solid"
+        if fam == "classical":
+            return "dashed"
+        if fam == "hybrid":
+            return "dotted"
+        if fam == "graph":
+            return "dashdot"
+        return "solid"
+
+    markers = ["D", "o", "s", "^", "v", "P"]
+
+    def _plot_panel(ax: plt.Axes, sid: str, mdl_list: List[str], title: str):
+        # Union of rows across models for this student for GT dots
+        rows_union_list = []
+        for k in mdl_list:
+            data = model_preds.get(k)
+            if data is None:
+                continue
+            mask_sid = id_map.loc[data["rows"]].astype(str).values == sid
+            if mask_sid.any():
+                rows_union_list.append(data["rows"][mask_sid])
+        if rows_union_list:
+            rows_union = np.unique(np.concatenate(rows_union_list))
+            ords = order_map.loc[rows_union].to_numpy()
+            args = np.argsort(ords)
+            rows_union = rows_union[args]
+            ords = ords[args]
+            gt_vals = pd.to_numeric(df.loc[rows_union, config.COL_RESP], errors="coerce").to_numpy()
+            # light shade incorrect
+            if len(ords) > 0:
+                for o, g in zip(ords, gt_vals):
+                    if g == 0:
+                        ax.axvspan(float(o) - 0.5, float(o) + 0.5, color="#000000", alpha=0.08, zorder=0)
+            m = np.isin(gt_vals, [0, 1]) & np.isfinite(ords)
+            ax.scatter(ords[m], gt_vals[m].astype(int), s=48, c="black", edgecolors="white", linewidths=0.7, zorder=4, label="Ground truth")
+
+        # Lines per model
+        for i, k in enumerate(mdl_list):
+            data = model_preds.get(k)
+            if data is None:
+                continue
+            mask_sid = id_map.loc[data["rows"]].astype(str).values == sid
+            if not mask_sid.any():
+                continue
+            rows_sid = data["rows"][mask_sid]
+            ord_sid = order_map.loc[rows_sid].to_numpy()
+            args = np.argsort(ord_sid)
+            ord_sid = ord_sid[args]
+            yp = data["y_prob"][mask_sid][args]
+            c = color_for(k, i)
+            ax.plot(
+                ord_sid, yp,
+                color=c, lw=2.2, alpha=0.98,
+                linestyle=linestyle_for(k),
+                marker=markers[i % len(markers)],
+                markerfacecolor="white",
+                markeredgecolor=c, markeredgewidth=1.0,
+                markersize=5,
+                markevery=6,
+                zorder=5,
+                path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
+                label=_display_model_name(k),
+            )
+        ax.set_ylim(0, 1)
+        ax.set_ylabel("p(correct)")
+        ax.grid(True, alpha=0.25)
+        ax.margins(x=0.02)
+        ax.set_title(title)
+
+    # Build figure
+    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(12, 6.2), sharex=True)
+    _plot_panel(axes[0], sid0, best3, f"Student {sid0} — Best 3 by {metric_col}")
+    _plot_panel(axes[1], sid0, worst3, f"Student {sid0} — Worst 3 by {metric_col}")
+    axes[-1].set_xlabel("Interaction order")
+
+    # Shared legend (combine both panels)
+    h1, l1 = axes[0].get_legend_handles_labels()
+    h2, l2 = axes[1].get_legend_handles_labels()
+    handles = h1 + h2
+    labels = l1 + l2
+    seen = set(); handles_dedup = []; labels_dedup = []
+    for h, l in zip(handles, labels):
+        if l and l not in seen:
+            seen.add(l); handles_dedup.append(h); labels_dedup.append(l)
+    if handles_dedup:
+        fig.legend(handles_dedup, labels_dedup, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(8, len(labels_dedup)), fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+    else:
+        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+
+    fig.savefig(outdir / "trajectories_best_vs_worst_single_student.png", dpi=300, bbox_inches="tight")
+    fig.savefig(outdir / "trajectories_best_vs_worst_single_student.pdf", bbox_inches="tight")
+    plt.close(fig)
    
 def best_threshold(y_true: np.ndarray, y_prob: np.ndarray, metric: str = "f1") -> Tuple[float, Dict[str, float]]:
     thresholds = np.linspace(0.01, 0.99, 99)
@@ -662,7 +839,7 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
             markeredgecolor=c,
             markeredgewidth=1.4,
             path_effects=[patheffects.withStroke(linewidth=4.5, foreground="white")],
-            label=f"{_sanitize_model_name(name)} (AP={ap:.3f})",
+            label=f"{_display_model_name(name)} (AP={ap:.3f})",
         )
 
     ax.set_xlim(0, 1)
@@ -789,7 +966,7 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
             markeredgecolor=c,
             markeredgewidth=1.2,
             path_effects=[patheffects.withStroke(linewidth=4.5, foreground="white")],
-            label=f"{_sanitize_model_name(name)} (AUC={auc_val:.3f})",
+            label=f"{_display_model_name(name)} (AUC={auc_val:.3f})",
         )
 
     ax.set_xlim(0, 1)
@@ -866,9 +1043,9 @@ def plot_calibration_grid(metrics: pd.DataFrame, outdir: Path):
         try:
             y_true, y_prob = _load_predictions(config.OUTPUT_DIR, name)
             prob_true, prob_pred = calibration_curve(y_true, y_prob, n_bins=10, strategy="quantile")
-            ax.plot(prob_pred, prob_true, marker="o", lw=1.5, label=name)
+            ax.plot(prob_pred, prob_true, marker="o", lw=1.5, label=_display_model_name(name))
             ax.plot([0, 1], [0, 1], "--", color="gray", lw=1)
-            ax.set_title(name, fontsize=9)
+            ax.set_title(_display_model_name(name), fontsize=9)
         except Exception as e:
             ax.text(0.5, 0.5, f"No data\n{name}", ha="center", va="center")
         ax.set_xlim(0, 1)
@@ -939,7 +1116,7 @@ def plot_confusion_matrices(metrics: pd.DataFrame, outdir: Path):
             ax.set_xlabel("Predicted label")
             ax.set_ylabel("True label")
             # Title: model name only (remove threshold/metrics)
-            ax.set_title(f"{name}", fontsize=9)
+            ax.set_title(f"{_display_model_name(name)}", fontsize=9)
         except Exception as e:
             ax.text(0.5, 0.5, f"No data\n{name}", ha="center", va="center")
             ax.set_xticks([]); ax.set_yticks([])
@@ -1072,6 +1249,18 @@ def main():
         )
     except Exception as e:
         print(f"[Grouped Trajectories] Skipped: {e}")
+
+    # Best vs Worst (by accuracy) single-student trajectories
+    try:
+        plot_student_trajectories_best_vs_worst(
+            metrics,
+            plot_dirs["summary"],
+            by_metric="accuracy",
+            min_len=20,
+            max_len=60,
+        )
+    except Exception as e:
+        print(f"[Best-vs-Worst Trajectories] Skipped: {e}")
 
     print("Saved plots to:", plot_dirs["base"].resolve())
 
