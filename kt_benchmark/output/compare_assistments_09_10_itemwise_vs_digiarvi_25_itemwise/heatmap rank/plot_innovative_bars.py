@@ -617,7 +617,17 @@ def _draw_single_heatmap_ranked(df: pd.DataFrame, outdir: Path) -> None:
 
     # display/annotation tables
     disp = rank_tbl.copy()
-    disp.columns = [f"{m}\n{d}" for m, d in disp.columns]
+    # Show full metric and dataset, but split dataset into brand and year on separate lines
+    def _split_dataset_two_lines(ds: str) -> str:
+        import re
+        mobj = re.match(r"^(.*?)[\s\-]*(\d{2}\-\d{2}|\d{4})$", ds)
+        if mobj:
+            brand = mobj.group(1).strip()
+            year = mobj.group(2).strip()
+            return f"{brand}\n{year}"
+        # fallback: keep as one line
+        return ds
+    disp.columns = [f"{m}\n{_split_dataset_two_lines(d)}" for m, d in disp.columns]
     annot_df = pd.DataFrame({
         f"{m}\n{d}": [
             ("" if pd.isna(tbl.loc[mdl, (m, d)]) else f"{tbl.loc[mdl, (m, d)]:.3f}\n#{int(rank_tbl.loc[mdl, (m, d)])}")
@@ -634,7 +644,8 @@ def _draw_single_heatmap_ranked(df: pd.DataFrame, outdir: Path) -> None:
     cmap = ListedColormap(colors_by_rank[:n_models])
     norm = mpl.colors.BoundaryNorm(boundaries=np.arange(1, n_models + 2), ncolors=n_models)
 
-    fig, ax = plt.subplots(figsize=(14, max(6.5, 0.48 * n_models + 2)))
+    # Wide landscape for readability; increase height scaling so bigger annotations fit
+    fig, ax = plt.subplots(figsize=(36, max(12.0, 0.8 * n_models + 2)))
     sns.heatmap(
         disp,
         ax=ax,
@@ -642,12 +653,28 @@ def _draw_single_heatmap_ranked(df: pd.DataFrame, outdir: Path) -> None:
         norm=norm,
         annot=annot_df,
         fmt="",
-        annot_kws={"fontsize": 7.5, "color": "black"},
+        # Bigger, bold in-box details for readability
+        annot_kws={"fontsize": 23, "fontweight": "bold", "color": "black"},
         cbar_kws={"label": "Rank"},
         linewidths=0.4,
         linecolor="white",
         square=False,
     )
+    # Make colorbar ticks and label large and bold (match ~19pt axis text)
+    try:
+        cbar = ax.collections[0].colorbar
+        if cbar is not None:
+            cbar.set_label("Rank", fontsize=19, fontweight="bold")
+            cbar.ax.tick_params(labelsize=19)
+            for lbl in cbar.ax.get_yticklabels():
+                lbl.set_fontweight("bold")
+    except Exception:
+        pass
+    # Horizontal x labels (three-line max), bigger and bold
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=0, ha="center", fontsize=19, fontweight="bold")
+    ax.tick_params(axis="x", which="major", pad=26)
+    # Larger, bold y labels
+    ax.set_yticklabels([_display_model_name(m) for m in order], rotation=0, fontsize=19, fontweight="bold")
     # Emphasize top-3 per column with visible black borders (ties included)
     for c_idx, col_name in enumerate(disp.columns):
         col_ranks = disp[col_name].astype(float).values
@@ -659,10 +686,12 @@ def _draw_single_heatmap_ranked(df: pd.DataFrame, outdir: Path) -> None:
     ax.set_ylabel("")
     ax.set_xlabel("")
     ax.set_yticklabels([_display_model_name(m) for m in order], rotation=0)
-    ax.set_title("Heatmap of Model Rankings by Metric Performance", pad=12)
 
     outdir.mkdir(parents=True, exist_ok=True)
+    # Reserve more bottom margin for multi-line x tick labels
+    plt.subplots_adjust(bottom=0.45)
     fig.tight_layout()
+    # Save at very high resolution
     fig.savefig(outdir / "all_metrics__heatmap_ranked.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "all_metrics__heatmap_ranked.pdf", bbox_inches="tight")
     plt.close(fig)
