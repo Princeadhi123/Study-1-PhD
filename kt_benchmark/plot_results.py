@@ -754,8 +754,25 @@ def plot_student_trajectories_best_vs_worst(
             ord_sid = ord_sid[args]
             yp = data["y_prob"][mask_sid][args]
             c = color_for(k, i)
+            # Extra jitter: symmetric x/y offsets by rank within this panel
+            # Helps separate very close trajectories visually
+            _xo = (-0.18, 0.0, 0.18)[i % 3] if len(mdl_list) <= 3 else (i - (len(mdl_list)-1)/2) * 0.06
+            _yj = (0.010, 0.0, -0.010)[i % 3] if len(mdl_list) <= 3 else (i - (len(mdl_list)-1)/2) * 0.004
+            # Specific nudge to separate LR and TIRT in the Best-3 panel
+            try:
+                is_best_panel = "best 3" in title.lower()
+            except Exception:
+                is_best_panel = False
+            if is_best_panel:
+                ksan = _sanitize_model_name(k).lower()
+                if ksan == "logisticregression":
+                    _yj += 0.012
+                elif ksan == "tirt":
+                    _yj -= 0.012
+            x_vals = ord_sid + _x_jitter_for_model(k) + _xo
+            y_vals = np.clip(yp + _yj, 0.0, 1.0)
             ax.plot(
-                ord_sid + _x_jitter_for_model(k), yp,
+                x_vals, y_vals,
                 color=c, lw=2.2, alpha=0.98,
                 linestyle=linestyle_for(k),
                 marker=markers[i % len(markers)],
@@ -866,15 +883,15 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
 
     # Colors: fixed mapping + fallback
     fixed_colors = {
-        "dkt": "#CC79A7",
-        "fkt": "#009E73",
-        "clkt": "#0072B2",
-        "adaptkt": "#D55E00",
-        "gkt": "#E69F00",
-        "bkt": "#56B4E9",
-        "rasch1pl": "#0072B2",
-        "logisticregression": "#009E73",
-        "tirt": "#D55E00",
+        "dkt": "#CC79A7",                 # magenta
+        "fkt": "#009E73",                 # green
+        "clkt": "#0072B2",                # blue
+        "adaptkt": "#D55E00",             # orange
+        "gkt": "#E69F00",                 # yellow-orange
+        "bkt": "#56B4E9",                 # sky blue
+        "rasch1pl": "#999999",            # gray (distinct)
+        "logisticregression": "#0173B2",  # dark blue (distinct from CLKT)
+        "tirt": "#9467BD",                # purple (distinct from AdaptKT)
     }
     palette = sns.color_palette("colorblind", n_colors=3)
     def color_for(name: str, i: int):
@@ -1017,9 +1034,9 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
         "adaptkt": "#D55E00",
         "gkt": "#E69F00",
         "bkt": "#56B4E9",
-        "rasch1pl": "#0072B2",
-        "logisticregression": "#009E73",
-        "tirt": "#D55E00",
+        "rasch1pl": "#999999",            # gray to avoid clash with CLKT
+        "logisticregression": "#0173B2",  # dark blue distinct from CLKT
+        "tirt": "#9467BD",                # purple distinct from AdaptKT
     }
     palette = sns.color_palette("colorblind", n_colors=3)
     def color_for(name: str, i: int):
@@ -1336,7 +1353,7 @@ def plot_metric_radar_ranks(metrics: pd.DataFrame, outdir: Path):
     # Color mapping consistent with other plots
     fixed_colors = {
         "dkt": "#CC79A7", "fkt": "#009E73", "clkt": "#0072B2", "adaptkt": "#D55E00",
-        "gkt": "#E69F00", "bkt": "#56B4E9", "rasch1pl": "#0072B2", "logisticregression": "#009E73", "tirt": "#D55E00",
+        "gkt": "#E69F00", "bkt": "#56B4E9", "rasch1pl": "#999999", "logisticregression": "#0173B2", "tirt": "#9467BD",
     }
     palette = sns.color_palette("colorblind", n_colors=max(9, M))
     def color_for(name: str, i: int):
@@ -1453,8 +1470,8 @@ def plot_metric_overall_rank_bars(metrics: pd.DataFrame, outdir: Path):
     ax.barh(y, df["total_score"].values, color=colors, edgecolor="white")
     ax.set_yticks(y, labels=df["model_display"].tolist())
     ax.invert_yaxis()  # best (lowest total rank) at top
-    ax.set_xlabel("Sum of scores (higher is better)")
-    ax.set_title("Overall Score across Accuracy, ROC AUC, AP, F1, Log Loss")
+    ax.set_xlabel("Sum of Ranks")
+    ax.set_title("Sum of Ranks across Accuracy, ROC AUC, AP, F1, Log Loss")
     # Annotate total rank values
     for yi, val in zip(y, df["total_score"].values):
         ax.text(val + 0.2, yi, f"{int(val)}", va="center", fontsize=9)
