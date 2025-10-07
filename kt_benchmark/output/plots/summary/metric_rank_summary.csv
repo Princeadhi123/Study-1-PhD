@@ -1,0 +1,10 @@
+model,model_display,accuracy,accuracy_score,roc_auc,roc_auc_score,avg_precision,avg_precision_score,f1,f1_score,log_loss,log_loss_score,total_rank,total_score
+TIRT,TIRT,1,9,1,9,1,9,5,5,5,5,13,37
+FKT,FKT,5,5,4,6,4,6,1,9,1,9,15,35
+CLKT,CLKT,2,8,2,8,2,8,6,4,4,6,16,34
+LogisticRegression,LR,2,8,3,7,3,7,6,4,3,7,17,33
+DKT,DKT,6,4,5,5,5,5,4,6,2,8,22,28
+GKT,GKT,7,3,6,4,6,4,2,8,6,4,27,23
+BKT,BKT,4,6,7,3,7,3,3,7,7,3,28,22
+AdaptKT,AdaptKT,8,2,8,2,8,2,8,2,8,2,40,10
+Rasch1PL,Rasch1PL,9,1,9,1,9,1,9,1,9,1,45,5

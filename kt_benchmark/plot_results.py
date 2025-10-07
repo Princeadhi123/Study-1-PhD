@@ -756,21 +756,26 @@ def plot_student_trajectories_best_vs_worst(
             c = color_for(k, i)
             # Extra jitter: symmetric x/y offsets by rank within this panel
             # Helps separate very close trajectories visually
-            _xo = (-0.18, 0.0, 0.18)[i % 3] if len(mdl_list) <= 3 else (i - (len(mdl_list)-1)/2) * 0.06
-            _yj = (0.010, 0.0, -0.010)[i % 3] if len(mdl_list) <= 3 else (i - (len(mdl_list)-1)/2) * 0.004
-            # Specific nudge to separate LR and TIRT in the Best-3 panel
-            try:
-                is_best_panel = "best 3" in title.lower()
-            except Exception:
-                is_best_panel = False
-            if is_best_panel:
-                ksan = _sanitize_model_name(k).lower()
-                if ksan == "logisticregression":
-                    _yj += 0.012
-                elif ksan == "tirt":
-                    _yj -= 0.012
+            _xo_raw = (-0.40, 0.0, 0.40)[i % 3] if len(mdl_list) <= 3 else (i - (len(mdl_list)-1)/2) * 0.12
+            # Keep combined x-jitter (model-specific + panel) inside a single time bin
+            _xo = float(np.clip(_x_jitter_for_model(k) + _xo_raw, -0.45, 0.45) - _x_jitter_for_model(k))
+            _yj = (0.080, 0.0, -0.080)[i % 3] if len(mdl_list) <= 3 else (i - (len(mdl_list)-1)/2) * 0.020
+            # Targeted vertical nudge for classical trio across any panel
+            # Ensures LR/CLKT/TIRT are visually separated even when overlapping
+            ksan = _sanitize_model_name(k).lower()
+            if ksan == "logisticregression":
+                _yj += 0.080
+            elif ksan == "tirt":
+                _yj -= 0.080
+            elif ksan == "clkt":
+                _yj += 0.060
+            elif ksan == "rasch1pl":
+                # Do not apply vertical jitter to Rasch1PL to preserve edge values hitting 0/1
+                _yj = 0.0
             x_vals = ord_sid + _x_jitter_for_model(k) + _xo
-            y_vals = np.clip(yp + _yj, 0.0, 1.0)
+            # Apply vertical jitter only for mid-range probabilities to avoid altering extremes
+            mid_mask = (yp >= 0.02) & (yp <= 0.98)
+            y_vals = np.clip(yp + (_yj * mid_mask.astype(float)), 0.0, 1.0)
             ax.plot(
                 x_vals, y_vals,
                 color=c, lw=2.2, alpha=0.98,
@@ -778,8 +783,8 @@ def plot_student_trajectories_best_vs_worst(
                 marker=markers[i % len(markers)],
                 markerfacecolor="white",
                 markeredgecolor=c, markeredgewidth=1.0,
-                markersize=5,
-                markevery=6,
+                markersize=6,
+                markevery=4,
                 zorder=5,
                 path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
                 label=_display_model_name(k),
