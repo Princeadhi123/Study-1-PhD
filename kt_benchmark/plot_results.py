@@ -891,11 +891,14 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
     ax.grid(True, color="#d0d0d0", alpha=0.4)
     ax.hlines(base, 0, 1, colors="gray", linestyles="--", lw=1.2, alpha=0.9, label=f"Class prior (≈ {base:.3f})")
 
+    # Jitter: top curve up, bottom down (keep within [0,1])
+    jitter = {0: +0.004, 1: 0.0, 2: -0.004}
     for i, (name, ap, rec, prec) in enumerate(top3):
         c = color_for(name, i)
+        prec_j = np.clip(prec + jitter.get(i, 0.0), 0.0, 1.0)
         ax.plot(
             rec,
-            prec,
+            prec_j,
             color=c,
             lw=3.0,
             alpha=1.0,
@@ -927,9 +930,10 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
         ymins, ymaxs = [], []
         for i, (name, ap, rec, prec) in enumerate(top3):
             c = color_for(name, i)
+            prec_j = np.clip(prec + jitter.get(i, 0.0), 0.0, 1.0)
             ins.plot(
                 rec,
-                prec,
+                prec_j,
                 color=c,
                 lw=2.0,
                 linestyle=linestyles[i % len(linestyles)],
@@ -960,10 +964,22 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
 
     handles, labels = ax.get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=3, fontsize=9, frameon=True)
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.legend(
+            handles,
+            labels,
+            loc="lower center",
+            bbox_to_anchor=(0.5, -0.012),
+            ncol=3,
+            fontsize=9,
+            frameon=True,
+            borderaxespad=0.05,
+            labelspacing=0.25,
+            columnspacing=0.7,
+            handletextpad=0.35,
+        )
+        fig.tight_layout(rect=[0, 0.045, 1, 0.99])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.tight_layout(rect=[0, 0.045, 1, 0.99])
 
     fig.savefig(outdir / "pr_top3.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "pr_top3.pdf", bbox_inches="tight")
@@ -1018,11 +1034,14 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
     ax.grid(True, color="#d0d0d0", alpha=0.35)
     ax.plot([0, 1], [0, 1], linestyle="--", color="gray", lw=1.2, alpha=0.85, label="Random (AUC=0.5)")
 
+    # Small vertical jitter for visual separation: top up, bottom down
+    jitter = {0: +0.004, 1: 0.0, 2: -0.004}
     for i, (name, auc_val, fpr, tpr) in enumerate(top3):
         c = color_for(name, i)
+        tpr_j = np.clip(tpr + jitter.get(i, 0.0), 0.0, 1.0)
         ax.plot(
             fpr,
-            tpr,
+            tpr_j,
             color=c,
             lw=3.0,
             alpha=1.0,
@@ -1054,9 +1073,10 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
         ymins, ymaxs = [], []
         for i, (name, auc_val, fpr, tpr) in enumerate(top3):
             c = color_for(name, i)
+            tpr_j = np.clip(tpr + jitter.get(i, 0.0), 0.0, 1.0)
             ins.plot(
                 fpr,
-                tpr,
+                tpr_j,
                 color=c,
                 lw=2.0,
                 linestyle=linestyles[i % len(linestyles)],
@@ -1070,8 +1090,8 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
             )
             m = (fpr >= x0) & (fpr <= x1)
             if np.any(m):
-                ymins.append(float(np.nanmin(tpr[m])))
-                ymaxs.append(float(np.nanmax(tpr[m])))
+                ymins.append(float(np.nanmin(tpr_j[m])))
+                ymaxs.append(float(np.nanmax(tpr_j[m])))
         ins.set_xlim(x0, x1)
         if ymins:
             y0 = max(0.6, min(ymins) - 0.015)
@@ -1087,10 +1107,10 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
 
     handles, labels = ax.get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=3, fontsize=9, frameon=True)
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.012), ncol=3, fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.045, 1, 0.99])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.tight_layout(rect=[0, 0.045, 1, 0.99])
 
     fig.savefig(outdir / "roc_top3.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "roc_top3.pdf", bbox_inches="tight")
@@ -1235,7 +1255,7 @@ def plot_metric_bars(metrics: pd.DataFrame, outdir: Path):
         ax.set_ylabel("")
         # annotate values
         for i, v in enumerate(df[col].values):
-            ax.text(v, i, f" {v:.3f}", va="center", fontsize=8)
+            ax.text(v, i, f" {v:.6f}", va="center", fontsize=8)
     # Hide any remaining empty axes
     for j in range(n, nrows * ncols):
         r, c = divmod(j, ncols)
