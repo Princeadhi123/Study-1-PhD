@@ -895,7 +895,7 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
         "gkt": "#E69F00",                 # yellow-orange
         "bkt": "#56B4E9",                 # sky blue
         "rasch1pl": "#999999",            # gray (distinct)
-        "logisticregression": "#0173B2",  # dark blue (distinct from CLKT)
+        "logisticregression": "#2CA02C",  # green (distinct from CLKT blue)
         "tirt": "#9467BD",                # purple (distinct from AdaptKT)
     }
     palette = sns.color_palette("colorblind", n_colors=3)
@@ -932,7 +932,7 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
             markeredgecolor=c,
             markeredgewidth=1.4,
             path_effects=[patheffects.withStroke(linewidth=4.5, foreground="white")],
-            label=f"{_display_model_name(name)} (AP={ap:.3f})",
+            label=f"{_display_model_name(name)} (AP={ap:.4f})",
         )
 
     ax.set_xlim(0, 1)
@@ -1040,7 +1040,7 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
         "gkt": "#E69F00",
         "bkt": "#56B4E9",
         "rasch1pl": "#999999",            # gray to avoid clash with CLKT
-        "logisticregression": "#0173B2",  # dark blue distinct from CLKT
+        "logisticregression": "#2CA02C",  # green distinct from CLKT
         "tirt": "#9467BD",                # purple distinct from AdaptKT
     }
     palette = sns.color_palette("colorblind", n_colors=3)
@@ -1075,7 +1075,7 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
             markeredgecolor=c,
             markeredgewidth=1.2,
             path_effects=[patheffects.withStroke(linewidth=4.5, foreground="white")],
-            label=f"{_display_model_name(name)} (AUC={auc_val:.3f})",
+            label=f"{_display_model_name(name)} (AUC={auc_val:.4f})",
         )
 
     ax.set_xlim(0, 1)
@@ -1459,10 +1459,17 @@ def plot_metric_overall_rank_bars(metrics: pd.DataFrame, outdir: Path):
     df["model_display"] = df["model"].apply(_display_model_name)
     df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
 
-    # Colors consistent with other plots
+    # Distinct colors for each model (no duplicates). Close to PR/ROC palette.
     fixed_colors = {
-        "dkt": "#CC79A7", "fkt": "#009E73", "clkt": "#0072B2", "adaptkt": "#D55E00",
-        "gkt": "#E69F00", "bkt": "#56B4E9", "rasch1pl": "#0072B2", "logisticregression": "#009E73", "tirt": "#D55E00",
+        "dkt": "#CC79A7",              # magenta
+        "fkt": "#009E73",              # green
+        "clkt": "#0072B2",             # blue
+        "adaptkt": "#D55E00",          # dark orange
+        "gkt": "#E69F00",              # yellow-orange
+        "bkt": "#56B4E9",              # sky blue
+        "rasch1pl": "#999999",         # gray
+        "logisticregression": "#8C564B",# brown (avoid green clash with FKT)
+        "tirt": "#9467BD",             # purple
     }
     palette = sns.color_palette("colorblind", n_colors=max(9, len(df)))
     def color_for(name: str, i: int):
@@ -1501,7 +1508,7 @@ def plot_per_model(metrics: pd.DataFrame, outdir: Path):
         auc_val = roc_auc_score(y_true, y_prob)
         axes[0].plot([0, 1], [0, 1], "--", color="gray", lw=1)
         axes[0].plot(fpr, tpr, lw=2)
-        axes[0].set_title(f"ROC (AUC={auc_val:.3f})")
+        axes[0].set_title(f"ROC (AUC={auc_val:.4f})")
         axes[0].set_xlabel("FPR")
         axes[0].set_ylabel("TPR")
         # PR
@@ -1510,7 +1517,7 @@ def plot_per_model(metrics: pd.DataFrame, outdir: Path):
         base = y_true.mean() if len(y_true) else 0.0
         axes[1].plot(recall, precision, lw=2)
         axes[1].hlines(base, 0, 1, colors="gray", linestyles="--")
-        axes[1].set_title(f"PR (AP={ap:.3f})")
+        axes[1].set_title(f"PR (AP={ap:.4f})")
         axes[1].set_xlabel("Recall")
         axes[1].set_ylabel("Precision")
         # Histogram

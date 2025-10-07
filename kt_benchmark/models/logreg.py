@@ -33,30 +33,38 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     if len(y_tr) == 0 or len(y_te) == 0:
         return {"category": "Machine Learning", "name": "LogisticRegression", "why": why, "error": "no valid next-step train/test rows"}
 
-    # Lightweight hyperparameter search over C with a small validation split
+    
     start_time = time.perf_counter()
     budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
-    C_grid = getattr(config, "LOGREG_C_GRID", [1.0])
+    
+    C_grid = getattr(config, "LOGREG_C_GRID", [0.9, 1.0, 1.1])
     best_C = None
     best_score = -np.inf
-    # If too few samples for a stratified split, fall back to default C
+    
     try:
         tr_idx_inner, va_idx_inner = train_test_split(
             np.arange(len(y_tr)), test_size=0.2, random_state=config.RANDOM_STATE, stratify=y_tr if len(np.unique(y_tr)) > 1 else None
         )
         X_tr_in, X_va_in = X_tr[tr_idx_inner], X_tr[va_idx_inner]
         y_tr_in, y_va_in = y_tr[tr_idx_inner], y_tr[va_idx_inner]
+        # Allow tiny solver/class_weight tweaks from config (defaults are conservative)
+        _solver = getattr(config, "LOGREG_SOLVER", "saga")  # saga and liblinear support sparse
+        _cw = getattr(config, "LOGREG_CLASS_WEIGHT", "balanced")
+        _max_iter = getattr(config, "LOGREG_MAX_ITER", 800)
+        _tol = getattr(config, "LOGREG_TOL", 1e-3)
+        _n_jobs = getattr(config, "LOGREG_N_JOBS", -1)
         for C in C_grid:
             if budget is not None and (time.perf_counter() - start_time) > float(budget):
                 break
             clf_tmp = LogisticRegression(
                 C=float(C),
-                max_iter=getattr(config, "LOGREG_MAX_ITER", 1000),
-                tol=getattr(config, "LOGREG_TOL", 1e-3),
-                class_weight="balanced",
-                solver="saga",
+                max_iter=_max_iter,
+                tol=_tol,
+                class_weight=_cw,
+                solver=_solver,
                 penalty="l2",
                 random_state=config.RANDOM_STATE,
+                n_jobs=_n_jobs,
             )
             clf_tmp.fit(X_tr_in, y_tr_in)
             prob_va = clf_tmp.predict_proba(X_va_in)[:, 1]
@@ -73,12 +81,13 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
 
     clf = LogisticRegression(
         C=float(best_C) if best_C is not None else 1.0,
-        max_iter=getattr(config, "LOGREG_MAX_ITER", 1000),
+        max_iter=getattr(config, "LOGREG_MAX_ITER", 800),
         tol=getattr(config, "LOGREG_TOL", 1e-3),
-        class_weight="balanced",
-        solver="saga",
+        class_weight=getattr(config, "LOGREG_CLASS_WEIGHT", "balanced"),
+        solver=getattr(config, "LOGREG_SOLVER", "saga"),
         penalty="l2",
         random_state=config.RANDOM_STATE,
+        n_jobs=getattr(config, "LOGREG_N_JOBS", -1),
     )
     clf.fit(X_tr, y_tr)
     y_prob = clf.predict_proba(X_te)[:, 1]

@@ -59,7 +59,8 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     emb = nn.Embedding(n_items, dim).to(device)
     loss_fn = nn.TripletMarginLoss(margin=1.0, p=2)
-    opt = torch.optim.Adam(emb.parameters(), lr=float(getattr(config, "CLKT_PRE_LR", 1e-2)))
+
+    opt = torch.optim.Adam(emb.parameters(), lr=float(getattr(config, "CLKT_PRE_LR", 1.1e-2)))
 
     def sample_batch(batch_size: int = 256):
         # sample positives, and random negatives different from anchor
@@ -79,8 +80,14 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         return torch.tensor(A, dtype=torch.long, device=device), torch.tensor(P, dtype=torch.long, device=device), torch.tensor(N, dtype=torch.long, device=device)
 
     emb.train()
-    steps = int(getattr(config, "CLKT_PRE_STEPS", 400))  # pretraining iterations
-    batch = int(getattr(config, "CLKT_PRE_BATCH", 256))
+    
+    steps = int(getattr(config, "CLKT_PRE_STEPS", 360))  # pretraining iterations
+    batch = int(getattr(config, "CLKT_PRE_BATCH", 320))
+    
+    patience = int(getattr(config, "CLKT_PRE_PATIENCE", 40))
+    min_delta = float(getattr(config, "CLKT_PRE_MIN_DELTA", 1e-4))
+    best_loss = float("inf")
+    bad = 0
     start_time = time.perf_counter()
     budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
     for _ in range(steps):
@@ -92,6 +99,15 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         opt.zero_grad()
         loss.backward()
         opt.step()
+        # Early stopping bookkeeping
+        L = float(loss.detach().cpu().item())
+        if L + min_delta < best_loss:
+            best_loss = L
+            bad = 0
+        else:
+            bad += 1
+            if bad >= patience:
+                break
 
     # Extract embeddings
     with torch.no_grad():
@@ -187,7 +203,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
 
     clf = LogisticRegression(
         C=float(best_C) if best_C is not None else 1.0,
-        max_iter=getattr(config, "CLKT_SUP_MAX_ITER", 1000),
+        max_iter=getattr(config, "CLKT_SUP_MAX_ITER", 800),
         class_weight="balanced",
         solver="lbfgs",
         random_state=config.RANDOM_STATE,
