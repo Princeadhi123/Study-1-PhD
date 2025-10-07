@@ -1361,9 +1361,9 @@ def plot_metric_radar_ranks(metrics: pd.DataFrame, outdir: Path):
     # Grid and labels
     ax.set_xticks(angles[:-1])
     ax.set_xticklabels(theta_labels)
-    ax.set_yticks(range(1, M + 1))
-    ax.set_yticklabels([str(r) for r in range(1, M + 1)])
-    ax.set_ylim(1, M)
+    ax.set_yticks(range(0, M + 1))
+    ax.set_yticklabels([str(r) for r in range(0, M + 1)])
+    ax.set_ylim(0, M)
     ax.yaxis.grid(True, color="#d0d0d0", alpha=0.35)
     ax.xaxis.grid(True, color="#d0d0d0", alpha=0.35)
 
@@ -1382,10 +1382,22 @@ def plot_metric_radar_ranks(metrics: pd.DataFrame, outdir: Path):
 
     handles, labels = ax.get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=4, fontsize=9, frameon=True)
-        fig.tight_layout(rect=[0, 0.05, 1, 0.98])
+        fig.legend(
+            handles,
+            labels,
+            loc="lower center",
+            bbox_to_anchor=(0.5, -0.03),
+            ncol=4,
+            fontsize=9,
+            frameon=True,
+            borderaxespad=0.05,
+            labelspacing=0.25,
+            columnspacing=0.8,
+            handletextpad=0.35,
+        )
+        fig.tight_layout(rect=[0, 0.075, 1, 0.995])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.98])
+        fig.tight_layout(rect=[0, 0.075, 1, 0.995])
     fig.savefig(outdir / "metric_radar_ranks.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "metric_radar_ranks.pdf", bbox_inches="tight")
     plt.close(fig)
