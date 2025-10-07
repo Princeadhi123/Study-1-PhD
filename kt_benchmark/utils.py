@@ -120,9 +120,16 @@ def build_dataset(min_events: int | None = None) -> Dataset:
 
 # Feature builders for non-sequence models
 
-def one_hot(series: pd.Series) -> pd.DataFrame:
+def one_hot(series: pd.Series, prefix: str | None = None) -> pd.DataFrame:
+    """
+    Dense one-hot with stable, prefixed column names to avoid duplicates across
+    different features (e.g., item vs group sharing the same category label).
+
+    If prefix is None, use the Series' name when available; otherwise 'feat'.
+    """
+    pref = prefix if prefix is not None else (str(series.name) if series.name is not None else "feat")
     # Use smaller dtype to reduce memory when using dense dummies
-    return pd.get_dummies(series.astype("category"), dummy_na=True, dtype=np.uint8)
+    return pd.get_dummies(series.astype("category"), dummy_na=True, dtype=np.uint8, prefix=pref)
 
 
 def prepare_tabular_features(df: pd.DataFrame, use_item: bool = True, use_group: bool = True, use_sex: bool = True, use_time: bool = True) -> pd.DataFrame:

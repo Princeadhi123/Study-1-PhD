@@ -552,7 +552,13 @@ def plot_student_trajectories_grouped(
             r = j // ncols
             c = j % ncols
             fig.delaxes(axes[r, c])
-        axes[min(n - 1, nrows * ncols - 1)].set_xlabel("Interaction order")
+        # Safely set x-label on a visible bottom axis
+        try:
+            axes_flat = [ax for ax in axes.ravel() if ax in fig.axes]
+            if axes_flat:
+                axes_flat[min(max(0, n - 1), len(axes_flat) - 1)].set_xlabel("Interaction order")
+        except Exception:
+            pass
         handles, labels = axes[0, 0].get_legend_handles_labels()
         if handles:
             fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(6, len(labels)), fontsize=9, frameon=True)
@@ -607,32 +613,80 @@ def plot_student_trajectories_best_vs_worst(
     id_map = df[config.COL_ID].astype(str)
     order_map = df[config.COL_ORDER]
 
-    # Candidate students by length and coverage in at least one of best3 models
+    # Candidate students by length
     sizes = df.groupby(df[config.COL_ID].astype(str))[config.COL_ID].size()
     allowed = set(sizes[(sizes >= min_len) & (sizes <= max_len)].index.astype(str).tolist())
-    coverage: Dict[str, int] = {}
+
+    # Prefer intersection coverage across all top-3 models so each line appears
+    sids_by_model: Dict[str, set] = {}
     for m in best3:
         data = model_preds.get(m)
         if data is None:
             continue
-        sids = id_map.loc[data["rows"]].astype(str)
-        for s in sids:
-            if s in allowed:
-                coverage[s] = coverage.get(s, 0) + 1
-    if not coverage:
-        return
-    sid0 = max(coverage.items(), key=lambda x: x[1])[0]
+        sids = set(id_map.loc[data["rows"]].astype(str))
+        sids_by_model[m] = {s for s in sids if s in allowed}
+    inter: set = set.intersection(*sids_by_model.values()) if sids_by_model and len(sids_by_model) == 3 else set()
 
-    # Colors: reuse fixed mapping from grouped trajectories
+    sid0: str
+    if inter:
+        # Choose the student in the intersection with the largest total coverage across the three
+        def total_cov(s: str) -> int:
+            tot = 0
+            for m in best3:
+                data = model_preds.get(m)
+                if data is None:
+                    continue
+                tot += int((id_map.loc[data["rows"]].astype(str).values == s).sum())
+            return tot
+        sid0 = max(inter, key=total_cov)
+    else:
+        # Fallback: original coverage-based selection (at least one best model covers the student)
+        coverage: Dict[str, int] = {}
+        for m in best3:
+            data = model_preds.get(m)
+            if data is None:
+                continue
+            sids = id_map.loc[data["rows"]].astype(str)
+            for s in sids:
+                if s in allowed:
+                    coverage[s] = coverage.get(s, 0) + 1
+        if not coverage:
+            return
+        sid0 = max(coverage.items(), key=lambda x: x[1])[0]
+
+    # Colors: ensure unique colors within this figure to avoid ambiguous overlaps
     fixed_colors = {
-        "dkt": "#CC79A7", "fkt": "#009E73", "clkt": "#0072B2", "adaptkt": "#D55E00",
-        "gkt": "#E69F00", "bkt": "#56B4E9", "rasch1pl": "#0072B2", "logisticregression": "#009E73", "tirt": "#D55E00",
+        "dkt": "#CC79A7",  # magenta
+        "fkt": "#009E73",  # green
+        "clkt": "#0072B2", # blue
+        "adaptkt": "#D55E00", # orange
+        "gkt": "#E69F00",  # yellow/orange
+        "bkt": "#56B4E9",  # light blue
+        "rasch1pl": "#0072B2", # blue (IRT)
+        "logisticregression": "#009E73", # green (LR)
+        "tirt": "#D55E00", # orange (temporal IRT)
     }
     all_models = best3 + [m for m in worst3 if m not in best3]
-    palette = sns.color_palette("colorblind", n_colors=max(6, len(all_models)))
-    def color_for(name: str, i: int) -> tuple:
+    # Build a collision-free color map for this figure
+    base_palette = sns.color_palette("husl", n_colors=max(8, len(all_models)))
+    used = set()
+    color_by_model = {}
+    for i, name in enumerate(all_models):
         key = _sanitize_model_name(name).lower()
-        return fixed_colors.get(key, palette[i % len(palette)])
+        c = fixed_colors.get(key)
+        if c is None or c in used:
+            # Assign an unused palette color
+            c = base_palette[i % len(base_palette)]
+            # Ensure uniqueness by stepping if needed
+            j = 0
+            while c in used and j < len(base_palette):
+                i = (i + 1) % len(base_palette)
+                c = base_palette[i]
+                j += 1
+        color_by_model[name] = c
+        used.add(c)
+    def color_for(name: str, i: int) -> tuple:
+        return color_by_model.get(name, base_palette[i % len(base_palette)])
 
     def linestyle_for(name: str) -> str:
         fam = _family_of_model(name)
