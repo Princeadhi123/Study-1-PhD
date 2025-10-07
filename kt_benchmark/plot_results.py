@@ -265,7 +265,7 @@ def plot_student_trajectories_all_models(
             ord_sid = ord_sid[order_idx]
             yp = data["y_prob"][mask_sid][order_idx]
             ax.plot(
-                ord_sid,
+                ord_sid + _x_jitter_for_model(mdl),
                 yp,
                 color=color_by_model[mdl],
                 lw=2.2,
@@ -285,22 +285,15 @@ def plot_student_trajectories_all_models(
         ax.set_title(f"Student {sid}")
         ax.grid(True, alpha=0.25)
         ax.margins(x=0.02)
-    axes[-1].set_xlabel("Interaction order")
-    # Shared legend below the plots (outside) with many columns and strong color separation
+    axes[-1].set_xlabel("Interaction order", labelpad=0)
+    # Legend just below all plots (outside axes) to save space
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
-        fig.legend(
-            handles,
-            labels,
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.04),
-            ncol=min(8, len(labels)),
-            fontsize=9,
-            frameon=True,
-        )
-        fig.tight_layout(rect=[0, 0.05, 1, 0.93])
+        fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.01),
+                   ncol=min(8, len(labels)), fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.04, 1, 0.98])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.93])
+        fig.tight_layout(rect=[0, 0.04, 1, 0.98])
     fig.suptitle("Example Student Trajectories", y=0.985)
     fig.savefig(outdir / "trajectories_all_models.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "trajectories_all_models.pdf", bbox_inches="tight")
@@ -318,6 +311,24 @@ def _family_of_model(name: str) -> str:
     if n in {"gkt"}:
         return "graph"
     return "other"
+
+
+def _x_jitter_for_model(name: str) -> float:
+    """Small x-offset to visually separate nearly overlapping lines.
+    We only jitter the two most similar classical baselines in our plots:
+    - LogisticRegression: -0.12
+    - CLKT: -0.12
+    - TIRT: +0.12
+    All others: 0.0
+    """
+    key = _sanitize_model_name(name).lower()
+    if key == "logisticregression":
+        return -0.12
+    if key == "clkt":
+        return -0.12
+    if key == "tirt":
+        return +0.12
+    return 0.0
 
 
 def plot_student_trajectories_grouped(
@@ -460,7 +471,7 @@ def plot_student_trajectories_grouped(
             ord_sid = ord_sid[args]
             yp = data["y_prob"][mask_sid][args]
             ax.plot(
-                ord_sid,
+                ord_sid + _x_jitter_for_model(k),
                 yp,
                 color=color_by_model.get(k, palette[i % len(palette)]),
                 lw=2.2,
@@ -507,7 +518,7 @@ def plot_student_trajectories_grouped(
     title2 = f"Student {sid0} — " + ", ".join(panel2_disp) if panel2_disp else f"Student {sid0}"
     _plot_panel(axes[0], sid0, title1, group_defs["Classical baselines"])
     _plot_panel(axes[1], sid0, title2, group_defs["Advanced models"])
-    axes[-1].set_xlabel("Interaction order")
+    axes[-1].set_xlabel("Interaction order", labelpad=0)
     # Legend outside bottom (combine from last panel)
     # Collect labels from both panels to avoid missing ones
     h1, l1 = axes[0].get_legend_handles_labels()
@@ -524,10 +535,11 @@ def plot_student_trajectories_grouped(
             handles_dedup.append(h)
             labels_dedup.append(l)
     if handles_dedup:
-        fig.legend(handles_dedup, labels_dedup, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(9, len(labels_dedup)), fontsize=9, frameon=True)
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.legend(handles_dedup, labels_dedup, loc="lower center", bbox_to_anchor=(0.5, -0.012),
+                   ncol=min(9, len(labels_dedup)), fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.045, 1, 0.985])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.tight_layout(rect=[0, 0.045, 1, 0.985])
     # No suptitle per request (remove 'Grouped by Model Family')
     fig.savefig(outdir / "trajectories_grouped_single_student.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "trajectories_grouped_single_student.pdf", bbox_inches="tight")
@@ -556,15 +568,16 @@ def plot_student_trajectories_grouped(
         try:
             axes_flat = [ax for ax in axes.ravel() if ax in fig.axes]
             if axes_flat:
-                axes_flat[min(max(0, n - 1), len(axes_flat) - 1)].set_xlabel("Interaction order")
+                axes_flat[min(max(0, n - 1), len(axes_flat) - 1)].set_xlabel("Interaction order", labelpad=0)
         except Exception:
             pass
         handles, labels = axes[0, 0].get_legend_handles_labels()
         if handles:
-            fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(6, len(labels)), fontsize=9, frameon=True)
-            fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+            fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.012),
+                       ncol=min(6, len(labels)), fontsize=9, frameon=True)
+            fig.tight_layout(rect=[0, 0.045, 1, 0.985])
         else:
-            fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+            fig.tight_layout(rect=[0, 0.045, 1, 0.985])
         fig.suptitle(f"Trajectories — {panel_key}", y=0.99)
         fig.savefig(outdir / f"trajectories_grouped_multi_students__{filename_stub}.png", dpi=300, bbox_inches="tight")
         fig.savefig(outdir / f"trajectories_grouped_multi_students__{filename_stub}.pdf", bbox_inches="tight")
@@ -742,7 +755,7 @@ def plot_student_trajectories_best_vs_worst(
             yp = data["y_prob"][mask_sid][args]
             c = color_for(k, i)
             ax.plot(
-                ord_sid, yp,
+                ord_sid + _x_jitter_for_model(k), yp,
                 color=c, lw=2.2, alpha=0.98,
                 linestyle=linestyle_for(k),
                 marker=markers[i % len(markers)],
@@ -764,9 +777,9 @@ def plot_student_trajectories_best_vs_worst(
     fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(12, 6.2), sharex=True)
     _plot_panel(axes[0], sid0, best3, f"Student {sid0} — Best 3 by {metric_col}")
     _plot_panel(axes[1], sid0, worst3, f"Student {sid0} — Worst 3 by {metric_col}")
-    axes[-1].set_xlabel("Interaction order")
+    axes[-1].set_xlabel("Interaction order", labelpad=0)
 
-    # Shared legend (combine both panels)
+    # Shared legend inside bottom axis (combine both panels)
     h1, l1 = axes[0].get_legend_handles_labels()
     h2, l2 = axes[1].get_legend_handles_labels()
     handles = h1 + h2
@@ -776,10 +789,11 @@ def plot_student_trajectories_best_vs_worst(
         if l and l not in seen:
             seen.add(l); handles_dedup.append(h); labels_dedup.append(l)
     if handles_dedup:
-        fig.legend(handles_dedup, labels_dedup, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(8, len(labels_dedup)), fontsize=9, frameon=True)
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.legend(handles_dedup, labels_dedup, loc="lower center", bbox_to_anchor=(0.5, -0.012),
+                   ncol=min(8, len(labels_dedup)), fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.045, 1, 0.985])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.tight_layout(rect=[0, 0.045, 1, 0.985])
 
     fig.savefig(outdir / "trajectories_best_vs_worst_single_student.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "trajectories_best_vs_worst_single_student.pdf", bbox_inches="tight")

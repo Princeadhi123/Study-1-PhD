@@ -3,89 +3,100 @@
     "category": "Psychometric (IRT)",
     "name": "Rasch1PL",
     "why": "Rasch (1PL) is the simplest IRT model: a single ability per student and difficulty per item, with logistic link. It provides an interpretable baseline in the psychometric family.",
-    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
-    "runtime_sec": 84.41991759999655
+    "test_rows": "[18583 18584 18585 ... 13962 13963 13964]",
+    "runtime_sec": 4.678750000000036
   },
   "BKT": {
     "category": "Bayesian",
     "name": "BKT",
     "why": "Standard BKT is the canonical Bayesian model for KT with interpretable parameters (L0, learn, guess, slip). We fit per-skill (group) using a coarse grid over parameters for robustness and speed.",
-    "test_rows": "[    2     3     4 ... 43917 43918 43931]",
-    "runtime_sec": 180.5199262999813
+    "test_rows": "[18610 18611 18612 ... 13946 13947 13944]",
+    "runtime_sec": 104.22914409999976
   },
   "LogisticRegression": {
     "category": "Machine Learning",
     "name": "LogisticRegression",
     "why": "Logistic Regression is a strong, transparent ML baseline for binary correctness using tabular features. It is fast, robust to high-dimensional one-hot features, and provides calibrated probabilities.",
-    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
-    "chosen_C": 1.0,
-    "runtime_sec": 0.3951704000355676
+    "test_rows": "[18583 18584 18585 ... 13962 13963 13964]",
+    "chosen_C": 10.0,
+    "runtime_sec": 0.23185319999993226
   },
   "DKT": {
     "category": "Deep Learning",
     "name": "DKT (minimal)",
     "why": "DKT (LSTM-based) is the classic deep learning KT model that captures sequential dependencies. Here we use a minimal version predicting current response from the running hidden state over item embeddings.",
-    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
-    "train_student_count": 293,
-    "test_student_count": 74,
-    "train_seq_count": 293,
-    "test_seq_count": 74,
+    "test_rows": "[18583 18584 18585 ... 13962 13963 13964]",
+    "train_student_count": 432,
+    "test_student_count": 109,
+    "train_seq_count": 432,
+    "test_seq_count": 109,
     "fallback_used": false,
-    "best_epoch": 10,
-    "runtime_sec": 139.37160569999833
+    "best_epoch": 12,
+    "runtime_sec": 13.143782100000408
   },
   "GKT": {
     "category": "Graph",
     "name": "GKT-lite",
     "why": "GKT-lite builds a knowledge-concept (KC) graph over groups (skills) via co-occurrence of student interactions, then smooths group difficulty over the graph to obtain predictions: p(g) blended with neighbors.",
-    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
+    "test_rows": "[18583 18584 18585 ... 13962 13963 13964]",
     "chosen_alpha": 0.5,
-    "runtime_sec": 0.18234970001503825
+    "runtime_sec": 0.2639717000001838
   },
   "TIRT": {
     "category": "Temporal/Sequential",
     "name": "TIRT-lite",
     "why": "TIRT-lite augments item effects with a simple temporal progress covariate (z-scored within-student time index). This emulates temporal Item Response Theory by allowing ability to drift over time.",
-    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
-    "chosen_C": 1.0,
-    "runtime_sec": 0.5861089000245556
+    "test_rows": "[18583 18584 18585 ... 13962 13963 13964]",
+    "chosen_C": 10.0,
+    "runtime_sec": 0.20540340000025026
   },
   "FKT": {
     "category": "Multi-task",
     "name": "FKT-lite",
     "why": "FKT-lite: a small shared MLP predicts correctness (primary) and response time (aux) jointly. Multi-task learning can improve representation quality and calibration by leveraging correlated auxiliary signals.",
-    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
-    "aux_mae_rt": 39.953346252441406,
-    "aux_rmse_rt": 77.9927749633789,
-    "best_epoch": 2,
-    "runtime_sec": 45.4879105000291
+    "test_rows": "[18583 18584 18585 ... 13962 13963 13964]",
+    "aux_mae_rt": 8.009256362915039,
+    "aux_rmse_rt": 15.642836570739746,
+    "best_epoch": 10,
+    "runtime_sec": 2.984245000000101
   },
   "CLKT": {
     "category": "Contrastive/Self-supervised",
     "name": "CLKT-lite",
     "why": "CLKT-lite: learn item embeddings via contrastive pretraining from train sequences (positive = co-occurring items), then fine-tune a logistic regression using learned embeddings + metadata to predict correctness.",
-    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
-    "chosen_C": 0.01,
-    "runtime_sec": 10.490840000042226
+    "test_rows": "[18583 18584 18585 ... 13962 13963 13964]",
+    "chosen_C": 10.0,
+    "runtime_sec": 4.647929100000056
   },
   "AdaptKT": {
     "category": "Domain Adaptive",
     "name": "AdaptKT-lite (CORAL)",
     "why": "AdaptKT-lite performs unsupervised CORAL feature alignment from a source domain (groups in train) to a target domain (unseen or held-out groups in test), then trains a logistic classifier on aligned source and evaluates on aligned target.",
     "domain_source_groups": [
-      "algebra",
-      "choose_1",
-      "choose_n"
+      "Addition2",
+      "BasicGeometry",
+      "DebugRobotCode",
+      "Division1",
+      "Division3",
+      "LogicalReasoning",
+      "MapDistance",
+      "MissingNumber_Division",
+      "MissingNumber_Subtraction"
     ],
     "domain_target_groups": [
-      "fill_in_1",
-      "open_response"
+      "Multiplication2",
+      "RainfallStatistics",
+      "Rally",
+      "Subtraction1",
+      "Subtraction2",
+      "Subtraction3",
+      "WordPuzzle"
     ],
-    "test_rows": "[  277   287   370 ... 43917 43918 43931]",
-    "chosen_C": 0.01,
-    "y_true_viz": "[1 0 1 ... 1 1 0]",
-    "y_prob_viz": "[0.42273174 0.70657116 0.53032625 ... 0.97503022 0.67270349 0.75609067]",
-    "test_rows_viz": "[    1     2     3 ... 43952 43953 43954]",
-    "runtime_sec": 365.0051515000523
+    "test_rows": "[  172   173   174 ... 30251 30252 30253]",
+    "chosen_C": 10.0,
+    "y_true_viz": "[1 1 0 ... 0 0 0]",
+    "y_prob_viz": "[0.6527188  0.65745977 0.65361622 ... 0.38048207 0.25225598 0.08957501]",
+    "test_rows_viz": "[  172   173   174 ... 30264 30265 30266]",
+    "runtime_sec": 0.13645190000033836
   }
 }
