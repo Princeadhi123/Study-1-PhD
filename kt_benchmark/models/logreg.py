@@ -10,7 +10,7 @@ from sklearn.metrics import roc_auc_score, accuracy_score
 import time
 
 from .. import config
-from ..utils import prepare_tabular_features_sparse_split
+from ..utils import prepare_next_step_features_sparse_split
 
 
 def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[str, Any]:
@@ -21,7 +21,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     if config.COL_RESP not in df.columns:
         return {"category": "Machine Learning", "name": "LogisticRegression", "why": why, "error": "response column missing"}
 
-    X_tr, X_te, _ = prepare_tabular_features_sparse_split(
+    X_tr, X_te, y_tr, y_te, rows_tr_next, rows_te_next = prepare_next_step_features_sparse_split(
         df,
         train_idx=train_idx,
         test_idx=test_idx,
@@ -30,19 +30,8 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         use_sex=True,
         use_time=False,
     )
-    y = pd.to_numeric(df[config.COL_RESP], errors="coerce")
-    mask = y.isin([0, 1])
-
-    tr = np.intersect1d(train_idx, np.where(mask)[0])
-    te = np.intersect1d(test_idx, np.where(mask)[0])
-    if tr.size == 0 or te.size == 0:
-        return {"category": "Machine Learning", "name": "LogisticRegression", "why": why, "error": "no valid train/test rows"}
-
-    # Align with valid mask selections
-    X_tr = X_tr[np.searchsorted(train_idx, tr)]
-    X_te = X_te[np.searchsorted(test_idx, te)]
-    y_tr = y.iloc[tr].astype(int).values
-    y_te = y.iloc[te].astype(int).values
+    if len(y_tr) == 0 or len(y_te) == 0:
+        return {"category": "Machine Learning", "name": "LogisticRegression", "why": why, "error": "no valid next-step train/test rows"}
 
     # Lightweight hyperparameter search over C with a small validation split
     start_time = time.perf_counter()
@@ -100,6 +89,6 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "why": why,
         "y_true": y_te,
         "y_prob": y_prob,
-        "test_rows": te,
+        "test_rows": rows_te_next,
         "chosen_C": float(best_C) if best_C is not None else 1.0,
     }

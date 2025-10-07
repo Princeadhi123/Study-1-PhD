@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .. import config
-from ..utils import prepare_tabular_features
+from ..utils import prepare_tabular_features, next_step_pairs_for_indices
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, accuracy_score
 import time
@@ -72,7 +72,13 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     if config.COL_RESP not in df.columns or config.COL_GROUP not in df.columns:
         return {"category": "Domain Adaptive", "name": "AdaptKT-lite", "why": why, "error": "Required columns missing (group/response)"}
 
-    # Build tabular features
+    # Build NEXT-step pairs for train/test
+    prev_tr, next_tr = next_step_pairs_for_indices(df, train_idx)
+    prev_te, next_te = next_step_pairs_for_indices(df, test_idx)
+    if next_tr.size == 0 or next_te.size == 0:
+        return {"category": "Domain Adaptive", "name": "AdaptKT-lite", "why": why, "error": "No next-step pairs"}
+
+    # Build features on NEXT rows
     X_all = prepare_tabular_features(df, use_item=True, use_group=True, use_sex=True, use_time=True)
     if X_all.empty:
         return {"category": "Domain Adaptive", "name": "AdaptKT-lite", "why": why, "error": "No features available"}
@@ -88,18 +94,30 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     is_src = df[config.COL_GROUP].astype(str).isin(src_groups).values
     is_tgt = df[config.COL_GROUP].astype(str).isin(tgt_groups).values
 
-    # Labeled source = intersection of train_idx, src, and binary mask
-    src_rows = np.intersect1d(np.where(mask_bin & is_src)[0], train_idx)
-    # Unlabeled target = test rows in target groups (use all features to estimate target stats)
-    tgt_rows_unl = np.intersect1d(np.where(is_tgt)[0], test_idx)
-    # Evaluation rows = test rows in target groups with labels
-    tgt_rows_eval = np.intersect1d(np.where(mask_bin & is_tgt)[0], test_idx)
+    # Labeled source NEXT rows from train in source groups
+    src_rows = np.intersect1d(next_tr, np.where(mask_bin & is_src)[0])
+    # Unlabeled target NEXT rows from test in target groups (for target stats)
+    tgt_rows_unl = np.intersect1d(next_te, np.where(is_tgt)[0])
+    # Evaluation NEXT rows in target groups with labels
+    tgt_rows_eval = np.intersect1d(next_te, np.where(mask_bin & is_tgt)[0])
 
     if src_rows.size == 0 or tgt_rows_unl.size == 0 or tgt_rows_eval.size == 0:
         return {"category": "Domain Adaptive", "name": "AdaptKT-lite", "why": why, "error": "Insufficient rows for domain adaptation"}
 
-    Xs = X_all.iloc[src_rows].values.astype(np.float64)
-    Xt_unl = X_all.iloc[tgt_rows_unl].values.astype(np.float64)
+    # Add prev_correct numeric column into feature matrices for alignment
+    if "prev_correct" not in X_all.columns:
+        X_all = X_all.copy()
+        # Initialize with zeros; we'll fill for specific index selections below
+        X_all.insert(0, "prev_correct", 0.0)
+    # Fill prev_correct for NEXT rows (needs values from PREV rows)
+    prev_corr_tr = pd.to_numeric(df.loc[prev_tr, config.COL_RESP], errors="coerce").astype(float).fillna(0.0).values
+    prev_corr_te = pd.to_numeric(df.loc[prev_te, config.COL_RESP], errors="coerce").astype(float).fillna(0.0).values
+    # Map arrays back to next indices order
+    X_all.loc[next_tr, "prev_correct"] = prev_corr_tr
+    X_all.loc[next_te, "prev_correct"] = prev_corr_te
+
+    Xs = X_all.loc[src_rows].values.astype(np.float64)
+    Xt_unl = X_all.loc[tgt_rows_unl].values.astype(np.float64)
     y_s = y_all.iloc[src_rows].astype(int).values
 
     # Standardize per-feature for stability before CORAL
@@ -156,7 +174,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     clf.fit(Xs_aligned, y_s)
 
     # Evaluate on aligned target eval rows (metrics file)
-    X_eval = X_all.iloc[tgt_rows_eval].values.astype(np.float64)
+    X_eval = X_all.loc[tgt_rows_eval].values.astype(np.float64)
     X_eval = std.transform(X_eval)
     X_eval = _coral_transform(X_eval, params)
     y_prob = clf.predict_proba(X_eval)[:, 1]
@@ -164,8 +182,8 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
 
     # Additional: VIZ predictions spanning ALL binary-labeled test rows (not only target groups)
     # These are saved separately and used only for visualization so trajectories don't end mid-sequence.
-    test_rows_all_bin = np.intersect1d(np.where(mask_bin)[0], test_idx)
-    X_test_all = X_all.iloc[test_rows_all_bin].values.astype(np.float64)
+    test_rows_all_bin = np.intersect1d(next_te, np.where(mask_bin)[0])
+    X_test_all = X_all.loc[test_rows_all_bin].values.astype(np.float64)
     X_test_all = std.transform(X_test_all)
     X_test_all = _coral_transform(X_test_all, params)
     y_prob_viz = clf.predict_proba(X_test_all)[:, 1]

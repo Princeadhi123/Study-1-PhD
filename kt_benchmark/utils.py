@@ -275,6 +275,180 @@ def student_group_sequences(df: pd.DataFrame) -> Dict[Tuple[str, str], pd.DataFr
     return sequences_by(df, [config.COL_ID, config.COL_GROUP])
 
 
+def next_step_row_indices(df: pd.DataFrame, row_positions: np.ndarray) -> np.ndarray:
+    """
+    Given a dataframe and a list/array of row positions (e.g., train_idx or test_idx),
+    return the positions corresponding to the "next" steps within each student sequence.
+
+    Concretely, for each student sorted by `config.COL_ORDER`, we drop the first event and
+    keep rows 2..L. This aligns features at time t+1 with the label y_{t+1}, ensuring all
+    models predict the next item.
+
+    If student IDs or order are missing, we simply drop the first row of the provided
+    positions as a conservative fallback.
+    """
+    try:
+        pos = np.asarray(row_positions, dtype=int)
+        if pos.size == 0:
+            return pos
+        if config.COL_ID not in df.columns or config.COL_ORDER not in df.columns:
+            return pos[1:] if pos.size > 1 else np.array([], dtype=int)
+        sub = df.iloc[pos][[config.COL_ID, config.COL_ORDER]].copy()
+        sub[config.COL_ID] = sub[config.COL_ID].astype(str)
+        sub_sorted = sub.sort_values([config.COL_ID, config.COL_ORDER])
+        # Mark the first event per student; keep the rest
+        is_first = ~sub_sorted[config.COL_ID].duplicated(keep="first")
+        rows_next = sub_sorted.index[~is_first].to_numpy(dtype=int)
+        return rows_next
+    except Exception:
+        # Fallback: drop first
+        pos = np.asarray(row_positions, dtype=int)
+        return pos[1:] if pos.size > 1 else np.array([], dtype=int)
+
+
+def next_step_pairs_for_indices(df: pd.DataFrame, row_positions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    For a given set of row positions, return aligned arrays (prev_rows, next_rows)
+    containing consecutive within-student pairs (t, t+1), sorted by (ID, order).
+    """
+    pos = np.asarray(row_positions, dtype=int)
+    if pos.size == 0:
+        return pos, pos
+    if config.COL_ID not in df.columns or config.COL_ORDER not in df.columns:
+        return (pos[:-1] if pos.size > 1 else np.array([], dtype=int), pos[1:] if pos.size > 1 else np.array([], dtype=int))
+    sub = df.iloc[pos][[config.COL_ID, config.COL_ORDER]].copy()
+    sub[config.COL_ID] = sub[config.COL_ID].astype(str)
+    sub = sub.sort_values([config.COL_ID, config.COL_ORDER])
+    ids = sub[config.COL_ID].values
+    idx_sorted = sub.index.values
+    keep = (ids[:-1] == ids[1:])
+    prev_rows = idx_sorted[:-1][keep]
+    next_rows = idx_sorted[1:][keep]
+    return prev_rows.astype(int), next_rows.astype(int)
+
+
+def prepare_next_step_features_sparse_split(
+    df: pd.DataFrame,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    use_item: bool = True,
+    use_group: bool = True,
+    use_sex: bool = True,
+    use_time: bool = True,
+) -> tuple[object, object, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Build sparse features for next-step prediction.
+    Features are taken from the NEXT rows (t+1) within each student, optionally including
+    a numeric 'prev_correct' feature from the current row (t).
+
+    Returns: X_tr, X_te, y_tr, y_te, rows_tr_next, rows_te_next
+    """
+    # Determine item column
+    item_col = config.COL_ITEM if config.COL_ITEM in df.columns else (config.COL_ITEM_INDEX if config.COL_ITEM_INDEX in df.columns else None)
+    prev_tr, next_tr = next_step_pairs_for_indices(df, train_idx)
+    prev_te, next_te = next_step_pairs_for_indices(df, test_idx)
+
+    # Labels at next rows
+    y_tr_raw = pd.to_numeric(df.loc[next_tr, config.COL_RESP], errors="coerce") if config.COL_RESP in df.columns else pd.Series(np.nan, index=next_tr)
+    y_te_raw = pd.to_numeric(df.loc[next_te, config.COL_RESP], errors="coerce") if config.COL_RESP in df.columns else pd.Series(np.nan, index=next_te)
+    mtr = y_tr_raw.isin([0, 1]).values
+    mte = y_te_raw.isin([0, 1]).values
+    prev_tr, next_tr = prev_tr[mtr], next_tr[mtr]
+    prev_te, next_te = prev_te[mte], next_te[mte]
+    y_tr = y_tr_raw[mtr].astype(int).values
+    y_te = y_te_raw[mte].astype(int).values
+
+    parts_tr: list[object] = []
+    parts_te: list[object] = []
+    names: list[str] = []
+
+    # One-hot for next-row item
+    if use_item and item_col is not None:
+        Xtr, Xte, nm = _ohe_fit_split(df.loc[next_tr, item_col].astype(str), df.loc[next_te, item_col].astype(str), item_col)
+        parts_tr.append(Xtr); parts_te.append(Xte); names.extend(nm)
+
+    # One-hot for next-row group
+    if use_group and config.COL_GROUP in df.columns:
+        Xtr, Xte, nm = _ohe_fit_split(df.loc[next_tr, config.COL_GROUP].astype(str), df.loc[next_te, config.COL_GROUP].astype(str), config.COL_GROUP)
+        parts_tr.append(Xtr); parts_te.append(Xte); names.extend(nm)
+
+    # One-hot sex (assumed constant per student but take next row for simplicity)
+    if use_sex and config.COL_SEX in df.columns:
+        Xtr, Xte, nm = _ohe_fit_split(df.loc[next_tr, config.COL_SEX].astype(str), df.loc[next_te, config.COL_SEX].astype(str), config.COL_SEX)
+        parts_tr.append(Xtr); parts_te.append(Xte); names.extend(nm)
+
+    # Time index z from next rows
+    if use_time and "time_index" in df.columns:
+        ti_tr = df.loc[next_tr, "time_index"].astype(float)
+        mu = ti_tr.mean(); sd = ti_tr.std(ddof=1) + 1e-9
+        ti_te = df.loc[next_te, "time_index"].astype(float)
+        vtr = ((ti_tr - mu) / sd).to_numpy(dtype=np.float32).reshape(-1, 1)
+        vte = ((ti_te - mu) / sd).to_numpy(dtype=np.float32).reshape(-1, 1)
+        Xtr = (_sp.csr_matrix(vtr) if _SP_AVAILABLE else vtr)
+        Xte = (_sp.csr_matrix(vte) if _SP_AVAILABLE else vte)
+        parts_tr.append(Xtr); parts_te.append(Xte); names.append("time_index_z")
+
+    # Prev correctness from prev rows (numeric)
+    if config.COL_RESP in df.columns:
+        prev_corr_tr = pd.to_numeric(df.loc[prev_tr, config.COL_RESP], errors="coerce").astype(float).to_numpy().reshape(-1, 1)
+        prev_corr_te = pd.to_numeric(df.loc[prev_te, config.COL_RESP], errors="coerce").astype(float).to_numpy().reshape(-1, 1)
+        prev_corr_tr = np.nan_to_num(prev_corr_tr, nan=0.0)
+        prev_corr_te = np.nan_to_num(prev_corr_te, nan=0.0)
+        Xtr = (_sp.csr_matrix(prev_corr_tr) if _SP_AVAILABLE else prev_corr_tr)
+        Xte = (_sp.csr_matrix(prev_corr_te) if _SP_AVAILABLE else prev_corr_te)
+        parts_tr.append(Xtr); parts_te.append(Xte); names.append("prev_correct")
+
+    # Stack
+    if _SP_AVAILABLE:
+        X_tr = _sp.hstack(parts_tr, format="csr") if parts_tr else _sp.csr_matrix((len(next_tr), 0), dtype=np.float32)
+        X_te = _sp.hstack(parts_te, format="csr") if parts_te else _sp.csr_matrix((len(next_te), 0), dtype=np.float32)
+    else:
+        X_tr = np.concatenate([p if isinstance(p, np.ndarray) else p.toarray() for p in parts_tr], axis=1) if parts_tr else np.zeros((len(next_tr), 0), dtype=np.float32)
+        X_te = np.concatenate([p if isinstance(p, np.ndarray) else p.toarray() for p in parts_te], axis=1) if parts_te else np.zeros((len(next_te), 0), dtype=np.float32)
+
+    return X_tr, X_te, y_tr, y_te, next_tr, next_te
+
+
+def prepare_next_step_features_dense_split(
+    df: pd.DataFrame,
+    train_idx: np.ndarray,
+    test_idx: np.ndarray,
+    use_item: bool = True,
+    use_group: bool = True,
+    use_sex: bool = True,
+    use_time: bool = True,
+) -> tuple[pd.DataFrame, pd.DataFrame, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Dense DataFrame feature builder for next-step prediction using prepare_tabular_features
+    on the NEXT rows. Adds a numeric 'prev_correct' column from the previous row.
+    Returns: X_tr_df, X_te_df, y_tr, y_te, rows_tr_next, rows_te_next
+    """
+    prev_tr, next_tr = next_step_pairs_for_indices(df, train_idx)
+    prev_te, next_te = next_step_pairs_for_indices(df, test_idx)
+
+    y_tr_raw = pd.to_numeric(df.loc[next_tr, config.COL_RESP], errors="coerce") if config.COL_RESP in df.columns else pd.Series(np.nan, index=next_tr)
+    y_te_raw = pd.to_numeric(df.loc[next_te, config.COL_RESP], errors="coerce") if config.COL_RESP in df.columns else pd.Series(np.nan, index=next_te)
+    mtr = y_tr_raw.isin([0, 1]).values
+    mte = y_te_raw.isin([0, 1]).values
+    prev_tr, next_tr = prev_tr[mtr], next_tr[mtr]
+    prev_te, next_te = prev_te[mte], next_te[mte]
+    y_tr = y_tr_raw[mtr].astype(int).values
+    y_te = y_te_raw[mte].astype(int).values
+
+    X_tr = prepare_tabular_features(df.loc[next_tr], use_item=use_item, use_group=use_group, use_sex=use_sex, use_time=use_time)
+    X_te = prepare_tabular_features(df.loc[next_te], use_item=use_item, use_group=use_group, use_sex=use_sex, use_time=use_time)
+    # align columns
+    all_cols = sorted(set(X_tr.columns).union(set(X_te.columns)))
+    X_tr = X_tr.reindex(columns=all_cols, fill_value=0.0)
+    X_te = X_te.reindex(columns=all_cols, fill_value=0.0)
+
+    # add prev_correct
+    prev_corr_tr = pd.to_numeric(df.loc[prev_tr, config.COL_RESP], errors="coerce").astype(float).fillna(0.0).values
+    prev_corr_te = pd.to_numeric(df.loc[prev_te, config.COL_RESP], errors="coerce").astype(float).fillna(0.0).values
+    X_tr.insert(0, "prev_correct", prev_corr_tr)
+    X_te.insert(0, "prev_correct", prev_corr_te)
+
+    return X_tr, X_te, y_tr, y_te, next_tr, next_te
 # Train-aware sparse feature builder to eliminate leakage
 
 def _ohe_fit_split(train_vals: pd.Series, test_vals: pd.Series, feature_name: str):

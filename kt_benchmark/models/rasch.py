@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 
 from .. import config
+from ..utils import next_step_row_indices
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
@@ -160,10 +161,15 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     try:
         model = Rasch1PL(max_iter=getattr(config, "RASCH_MAX_ITER", 30), inner_iter=getattr(config, "RASCH_INNER_ITER", 3))
         model.fit(df, train_idx)
-        # Use only valid binary responses and keep their original row indices
-        y_all = pd.to_numeric(df.iloc[test_idx][config.COL_RESP], errors="coerce")
-        mask = y_all.isin([0, 1])
-        te_rows = np.array(df.iloc[test_idx].index[mask], dtype=int)
+        # Next-item evaluation: shift to next rows within each student in test split
+        te_rows_next = next_step_row_indices(df, np.asarray(test_idx, dtype=int))
+        if te_rows_next.size == 0:
+            raise ValueError("no valid next-step rows for Rasch evaluation")
+        y_all = pd.to_numeric(df.loc[te_rows_next, config.COL_RESP], errors="coerce")
+        mask = y_all.isin([0, 1]).values
+        te_rows = te_rows_next[mask]
+        if te_rows.size == 0:
+            raise ValueError("no valid binary next-step rows for Rasch evaluation")
         y_true = y_all[mask].astype(int).values
         y_prob = model.predict_proba(df, te_rows)
         return {

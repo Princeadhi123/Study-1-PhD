@@ -76,13 +76,16 @@ def _fit_group_params(group_df: pd.DataFrame) -> BKTParams:
 
 
 def _predict_sequence_probs(y_seq: np.ndarray, params: BKTParams) -> np.ndarray:
-    # Produce per-step prediction BEFORE seeing y_t
+    """
+    Return NEXT-step probabilities for a given sequence.
+    For each observed y_t, we update the latent knowledge and emit the probability
+    for the next step t+1, i.e., p(y_{t+1}=1 | history up to t).
+    Output length = len(y_seq) - 1, aligned to y[1:].
+    """
     L = params.L0
-    probs = []
-    for yt in y_seq:
-        p_correct = L * (1 - params.S) + (1 - L) * params.G
-        probs.append(p_correct)
-        # After observing yt, update L for next step
+    probs_next = []
+    for t, yt in enumerate(y_seq):
+        # Update posterior with current observation
         if yt == 1:
             num = L * (1 - params.S)
             den = L * (1 - params.S) + (1 - L) * params.G
@@ -92,7 +95,14 @@ def _predict_sequence_probs(y_seq: np.ndarray, params: BKTParams) -> np.ndarray:
         den = float(np.clip(den, 1e-9, None))
         post = num / den
         L = post + (1 - post) * params.T
-    return np.array(probs, dtype=float)
+        # Predict next-step probability after the update (except we don't know y_{t+1} yet)
+        p_next = L * (1 - params.S) + (1 - L) * params.G
+        probs_next.append(float(np.clip(p_next, 1e-6, 1 - 1e-6)))
+    # The last emitted p_next corresponds to after observing the final y_L; there is no y_{L+1}
+    # Drop the last probability to align to y[1:]
+    if len(probs_next) > 0:
+        probs_next = probs_next[:-1]
+    return np.array(probs_next, dtype=float)
 
 
 def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[str, Any]:
@@ -123,7 +133,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         # Uses entire train_df sequences by student
         global_params = _fit_group_params(train_df)
 
-    # Predict on test: sequentially within each student per group
+    # Predict on test: sequentially within each student per group (NEXT item)
     test_df = df.iloc[test_idx].copy()
     test_df = test_df.sort_values([config.COL_ID, config.COL_GROUP, config.COL_ORDER])
 
@@ -135,16 +145,20 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         y = pd.to_numeric(sub[config.COL_RESP], errors="coerce")
         mask = (y == 0) | (y == 1)
         y = y.where(mask).dropna().astype(int)
-        if y.empty:
+        # Need at least 2 steps to form a next-item target
+        if len(y) < 2:
             continue
         if use_per_group:
             params = group_params.get(str(g), BKTParams(0.1, 0.1, 0.1, 0.1))
         else:
             params = global_params or BKTParams(0.1, 0.1, 0.1, 0.1)
-        probs = _predict_sequence_probs(y.values, params)
-        y_true_list.extend(y.values.tolist())
+        probs = _predict_sequence_probs(y.values, params)  # length = len(y) - 1
+        # Align to next-step labels y[1:] and corresponding row indices
+        y_next = y.values[1:]
+        rows_next = sub.index[mask][1:]
+        y_true_list.extend(y_next.tolist())
         y_prob_list.extend(probs.tolist())
-        row_idx_list.extend(sub.index[mask].tolist())
+        row_idx_list.extend(rows_next.tolist())
 
     if not y_true_list:
         return {"category": "Bayesian", "name": "BKT", "why": why, "error": "No valid test sequences"}

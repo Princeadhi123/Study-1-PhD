@@ -7,7 +7,7 @@ import pandas as pd
 import time
 
 from .. import config
-from ..utils import prepare_tabular_features
+from ..utils import prepare_next_step_features_dense_split
 from sklearn.model_selection import train_test_split
 
 
@@ -26,29 +26,36 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     if config.COL_RESP not in df.columns:
         return {"category": "Multi-task", "name": "FKT-lite", "why": why, "error": "response column missing"}
 
-    # Build tabular features, then drop log_rt column to avoid leakage into RT head
-    X = prepare_tabular_features(df, use_item=True, use_group=True, use_sex=True, use_time=True)
-    if "log_rt" in X.columns:
-        X = X.drop(columns=["log_rt"])  # prevent trivial RT prediction
+    # Build NEXT-step features and labels; helper includes prev_correct and next-row features
+    X_tr_df, X_te_df, y_tr_corr_arr, y_te_corr_arr, rows_tr_next, rows_te_next = prepare_next_step_features_dense_split(
+        df,
+        train_idx=train_idx,
+        test_idx=test_idx,
+        use_item=True,
+        use_group=True,
+        use_sex=True,
+        use_time=True,
+    )
+    if len(y_tr_corr_arr) == 0 or len(y_te_corr_arr) == 0:
+        return {"category": "Multi-task", "name": "FKT-lite", "why": why, "error": "no valid next-step train/test rows"}
 
-    y_corr = pd.to_numeric(df[config.COL_RESP], errors="coerce")
-    mask_corr = y_corr.isin([0, 1])
+    # Drop any log_rt column to avoid leakage into RT head if present
+    if "log_rt" in X_tr_df.columns:
+        X_tr_df = X_tr_df.drop(columns=["log_rt"])  # prevent trivial RT prediction
+        X_te_df = X_te_df.drop(columns=["log_rt"])  # keep columns aligned
 
-    y_rt = pd.to_numeric(df[config.COL_RT], errors="coerce") if config.COL_RT in df.columns else pd.Series(np.nan, index=df.index)
-    mask_rt = y_rt.notna()
+    X_tr = X_tr_df.values.astype(np.float32)
+    X_te = X_te_df.values.astype(np.float32)
+    y_tr_corr = y_tr_corr_arr.astype(np.float32)
+    y_te_corr = y_te_corr_arr.astype(np.float32)
 
-    tr = np.intersect1d(train_idx, np.where(mask_corr)[0])
-    te = np.intersect1d(test_idx, np.where(mask_corr)[0])
-    if tr.size == 0 or te.size == 0:
-        return {"category": "Multi-task", "name": "FKT-lite", "why": why, "error": "no valid train/test rows"}
-
-    X_tr = X.iloc[tr].values.astype(np.float32)
-    X_te = X.iloc[te].values.astype(np.float32)
-    y_tr_corr = y_corr.iloc[tr].astype(int).values.astype(np.float32)
-    y_te_corr = y_corr.iloc[te].astype(int).values.astype(np.float32)
-
-    y_tr_rt = y_rt.iloc[tr].values.astype(np.float32)
-    y_te_rt = y_rt.iloc[te].values.astype(np.float32)
+    # Next-step response time labels (aux task) from NEXT rows
+    if config.COL_RT in df.columns:
+        y_tr_rt = pd.to_numeric(df.loc[rows_tr_next, config.COL_RT], errors="coerce").values.astype(np.float32)
+        y_te_rt = pd.to_numeric(df.loc[rows_te_next, config.COL_RT], errors="coerce").values.astype(np.float32)
+    else:
+        y_tr_rt = np.full(shape=len(rows_tr_next), fill_value=np.nan, dtype=np.float32)
+        y_te_rt = np.full(shape=len(rows_te_next), fill_value=np.nan, dtype=np.float32)
     m_tr_rt = np.isfinite(y_tr_rt)
     m_te_rt = np.isfinite(y_te_rt)
 
@@ -171,7 +178,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         "why": why,
         "y_true": y_te_corr,
         "y_prob": y_prob,
-        "test_rows": te,
+        "test_rows": rows_te_next,
         "aux_mae_rt": mae,
         "aux_rmse_rt": rmse,
         "best_epoch": int(best_epoch) if best_epoch >= 0 else None,
