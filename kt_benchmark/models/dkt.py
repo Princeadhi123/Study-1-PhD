@@ -207,10 +207,18 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             y_pad = y_pad.to(device)
             lengths = lengths.to(device)
             logits = model(it_pad, lengths)
+            # Next-item loss: compare logits[:, :-1] to y[:, 1:] where labels exist
             y_float = (y_pad == 1).float()
             mask = (y_pad != -1).float()
-            loss = crit(logits, y_float)
-            loss = (loss * mask).sum() / (mask.sum() + 1e-6)
+            if logits.size(1) > 1:
+                logits_n = logits[:, :-1]
+                y_n = y_float[:, 1:]
+                m_n = mask[:, 1:]
+                loss_raw = crit(logits_n, y_n)
+                loss = (loss_raw * m_n).sum() / (m_n.sum() + 1e-6)
+            else:
+                # No next-step available for length-1 sequences in a batch
+                loss = (logits * 0).sum()
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -226,9 +234,13 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
                     logits = model(it_pad, lengths)
                     y_float = (y_pad == 1).float()
                     mask = (y_pad != -1).float()
-                    l = crit(logits, y_float)
-                    l = (l * mask).sum() / (mask.sum() + 1e-6)
-                    val_losses.append(l.item())
+                    if logits.size(1) > 1:
+                        logits_n = logits[:, :-1]
+                        y_n = y_float[:, 1:]
+                        m_n = mask[:, 1:]
+                        l_raw = crit(logits_n, y_n)
+                        l = (l_raw * m_n).sum() / (m_n.sum() + 1e-6)
+                        val_losses.append(l.item())
                 val_loss = float(np.mean(val_losses)) if val_losses else float("inf")
             # Early stopping check
             if val_loss < best_val - 1e-4:
@@ -259,14 +271,19 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             lengths = lengths.to(device)
             logits = model(it_pad, lengths)
             probs = torch.sigmoid(logits)
-            mask = (y_pad != -1)
-            y_true = (y_pad[mask]).float().cpu().numpy()
-            y_prob = (probs[mask]).float().cpu().numpy()
-            r_vals = (r_pad[mask]).long().cpu().numpy()
-            if y_true.size:
-                y_true_all.extend(y_true.tolist())
-                y_prob_all.extend(y_prob.tolist())
-                row_idx_all.extend(r_vals.tolist())
+            # Next-item eval: use positions 1..L-1 for y_true and 0..L-2 for probabilities
+            if logits.size(1) > 1:
+                y_slice = y_pad[:, 1:]
+                p_slice = probs[:, :-1]
+                r_slice = r_pad[:, 1:]
+                mask = (y_slice != -1)
+                y_true = (y_slice[mask]).float().cpu().numpy()
+                y_prob = (p_slice[mask]).float().cpu().numpy()
+                r_vals = (r_slice[mask]).long().cpu().numpy()
+                if y_true.size:
+                    y_true_all.extend(y_true.tolist())
+                    y_prob_all.extend(y_prob.tolist())
+                    row_idx_all.extend(r_vals.tolist())
 
     if not y_true_all:
         return {

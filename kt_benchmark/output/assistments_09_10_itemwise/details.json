@@ -3,70 +3,70 @@
     "category": "Psychometric (IRT)",
     "name": "Rasch1PL",
     "why": "Rasch (1PL) is the simplest IRT model: a single ability per student and difficulty per item, with logistic link. It provides an interpretable baseline in the psychometric family.",
-    "test_rows": "[    0     1     2 ... 43952 43953 43954]",
-    "runtime_sec": 69.80718280002475
+    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
+    "runtime_sec": 80.64030310000089
   },
   "BKT": {
     "category": "Bayesian",
     "name": "BKT",
     "why": "Standard BKT is the canonical Bayesian model for KT with interpretable parameters (L0, learn, guess, slip). We fit per-skill (group) using a coarse grid over parameters for robustness and speed.",
-    "test_rows": "[    0     2     3 ... 43917 43918 43931]",
-    "runtime_sec": 182.4645945999655
+    "test_rows": "[    2     3     4 ... 43917 43918 43931]",
+    "runtime_sec": 147.06683260000136
   },
   "LogisticRegression": {
     "category": "Machine Learning",
     "name": "LogisticRegression",
     "why": "Logistic Regression is a strong, transparent ML baseline for binary correctness using tabular features. It is fast, robust to high-dimensional one-hot features, and provides calibrated probabilities.",
-    "test_rows": "[    0     1     2 ... 43952 43953 43954]",
+    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
     "chosen_C": 1.0,
-    "runtime_sec": 1.032501800043974
+    "runtime_sec": 0.3983150000021851
   },
   "DKT": {
     "category": "Deep Learning",
     "name": "DKT (minimal)",
     "why": "DKT (LSTM-based) is the classic deep learning KT model that captures sequential dependencies. Here we use a minimal version predicting current response from the running hidden state over item embeddings.",
-    "test_rows": "[    0     1     2 ... 43952 43953 43954]",
+    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
     "train_student_count": 293,
     "test_student_count": 74,
     "train_seq_count": 293,
     "test_seq_count": 74,
     "fallback_used": false,
-    "best_epoch": 8,
-    "runtime_sec": 125.80081939999945
+    "best_epoch": 10,
+    "runtime_sec": 131.74916539999685
   },
   "GKT": {
     "category": "Graph",
     "name": "GKT-lite",
     "why": "GKT-lite builds a knowledge-concept (KC) graph over groups (skills) via co-occurrence of student interactions, then smooths group difficulty over the graph to obtain predictions: p(g) blended with neighbors.",
-    "test_rows": "[    0     1     2 ... 43952 43953 43954]",
+    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
     "chosen_alpha": 0.5,
-    "runtime_sec": 0.1474877999862656
+    "runtime_sec": 0.15845830000034766
   },
   "TIRT": {
     "category": "Temporal/Sequential",
     "name": "TIRT-lite",
     "why": "TIRT-lite augments item effects with a simple temporal progress covariate (z-scored within-student time index). This emulates temporal Item Response Theory by allowing ability to drift over time.",
-    "test_rows": "[    0     1     2 ... 43952 43953 43954]",
+    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
     "chosen_C": 1.0,
-    "runtime_sec": 1.0220025000162423
+    "runtime_sec": 0.6906779999990249
   },
   "FKT": {
     "category": "Multi-task",
     "name": "FKT-lite",
     "why": "FKT-lite: a small shared MLP predicts correctness (primary) and response time (aux) jointly. Multi-task learning can improve representation quality and calibration by leveraging correlated auxiliary signals.",
-    "test_rows": "[    0     1     2 ... 43952 43953 43954]",
-    "aux_mae_rt": 44.86726379394531,
-    "aux_rmse_rt": 86.1417236328125,
+    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
+    "aux_mae_rt": 39.29515075683594,
+    "aux_rmse_rt": 77.3071517944336,
     "best_epoch": 3,
-    "runtime_sec": 52.62122420000378
+    "runtime_sec": 44.647491899999295
   },
   "CLKT": {
     "category": "Contrastive/Self-supervised",
     "name": "CLKT-lite",
     "why": "CLKT-lite: learn item embeddings via contrastive pretraining from train sequences (positive = co-occurring items), then fine-tune a logistic regression using learned embeddings + metadata to predict correctness.",
-    "test_rows": "[    0     1     2 ... 43952 43953 43954]",
-    "chosen_C": 10.0,
-    "runtime_sec": 9.064116800029296
+    "test_rows": "[    1     2     3 ... 43952 43953 43954]",
+    "chosen_C": 0.01,
+    "runtime_sec": 2.348526199999469
   },
   "AdaptKT": {
     "category": "Domain Adaptive",
@@ -81,11 +81,11 @@
       "fill_in_1",
       "open_response"
     ],
-    "test_rows": "[  276   277   287 ... 43917 43918 43931]",
+    "test_rows": "[  277   287   370 ... 43917 43918 43931]",
     "chosen_C": 0.01,
-    "y_true_viz": "[0 1 0 ... 1 1 0]",
-    "y_prob_viz": "[0.98385385 0.51920027 0.63842932 ... 0.9879072  0.59334636 0.70545597]",
-    "test_rows_viz": "[    0     1     2 ... 43952 43953 43954]",
-    "runtime_sec": 329.2788621999789
+    "y_true_viz": "[1 0 1 ... 1 1 0]",
+    "y_prob_viz": "[0.42273174 0.70657116 0.53032625 ... 0.97503022 0.67270349 0.75609067]",
+    "test_rows_viz": "[    1     2     3 ... 43952 43953 43954]",
+    "runtime_sec": 413.47461439999825
   }
 }

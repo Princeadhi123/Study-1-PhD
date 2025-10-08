@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .. import config
+from ..utils import next_step_row_indices
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, accuracy_score
 import time
@@ -132,15 +133,18 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     # Compute final smoothed dict on full train with best alpha
     smoothed, global_mean, _ = smooth_from_frame(train_df, best_alpha)
 
-    # Predict for test rows by group lookup; keep only valid binary rows and return their original indices
-    g_series = test_df[config.COL_GROUP].astype(str) if config.COL_GROUP in test_df.columns else pd.Series([], dtype=str)
-    y_all = pd.to_numeric(test_df[config.COL_RESP], errors="coerce")
-    mask = y_all.isin([0, 1])
-    if not mask.any():
-        return {"category": "Graph", "name": "GKT-lite", "why": why, "error": "No valid binary test rows"}
-    rows = test_df.index[mask].to_numpy()
+    # Next-item evaluation rows from original test_idx
+    rows_next = next_step_row_indices(df, np.asarray(test_idx, dtype=int))
+    if rows_next.size == 0:
+        return {"category": "Graph", "name": "GKT-lite", "why": why, "error": "No next-step rows in test"}
+    y_all = pd.to_numeric(df.loc[rows_next, config.COL_RESP], errors="coerce")
+    mask = y_all.isin([0, 1]).values
+    rows = rows_next[mask]
+    if rows.size == 0:
+        return {"category": "Graph", "name": "GKT-lite", "why": why, "error": "No valid binary next-step rows"}
+    g_series = df.loc[rows, config.COL_GROUP].astype(str) if config.COL_GROUP in df.columns else pd.Series([], dtype=str)
     y_true = y_all[mask].astype(int).values
-    y_prob = np.array([smoothed.get(g, global_mean) for g in g_series[mask]], dtype=float)
+    y_prob = np.array([smoothed.get(g, global_mean) for g in g_series], dtype=float)
 
     return {
         "category": "Graph",

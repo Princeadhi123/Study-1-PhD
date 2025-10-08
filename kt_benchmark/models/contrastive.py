@@ -7,7 +7,7 @@ import pandas as pd
 import time
 
 from .. import config
-from ..utils import student_sequences, one_hot
+from ..utils import student_sequences, one_hot, next_step_pairs_for_indices
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, accuracy_score
 
@@ -59,7 +59,8 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     emb = nn.Embedding(n_items, dim).to(device)
     loss_fn = nn.TripletMarginLoss(margin=1.0, p=2)
-    opt = torch.optim.Adam(emb.parameters(), lr=float(getattr(config, "CLKT_PRE_LR", 1e-2)))
+
+    opt = torch.optim.Adam(emb.parameters(), lr=float(getattr(config, "CLKT_PRE_LR", 1.1e-2)))
 
     def sample_batch(batch_size: int = 256):
         # sample positives, and random negatives different from anchor
@@ -79,8 +80,14 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         return torch.tensor(A, dtype=torch.long, device=device), torch.tensor(P, dtype=torch.long, device=device), torch.tensor(N, dtype=torch.long, device=device)
 
     emb.train()
-    steps = int(getattr(config, "CLKT_PRE_STEPS", 400))  # pretraining iterations
-    batch = int(getattr(config, "CLKT_PRE_BATCH", 256))
+    
+    steps = int(getattr(config, "CLKT_PRE_STEPS", 360))  # pretraining iterations
+    batch = int(getattr(config, "CLKT_PRE_BATCH", 320))
+    
+    patience = int(getattr(config, "CLKT_PRE_PATIENCE", 40))
+    min_delta = float(getattr(config, "CLKT_PRE_MIN_DELTA", 1e-4))
+    best_loss = float("inf")
+    bad = 0
     start_time = time.perf_counter()
     budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
     for _ in range(steps):
@@ -92,6 +99,15 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         opt.zero_grad()
         loss.backward()
         opt.step()
+        # Early stopping bookkeeping
+        L = float(loss.detach().cpu().item())
+        if L + min_delta < best_loss:
+            best_loss = L
+            bad = 0
+        else:
+            bad += 1
+            if bad >= patience:
+                break
 
     # Extract embeddings
     with torch.no_grad():
@@ -121,25 +137,37 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             feats.append(pd.DataFrame({"time_index_z": ti.values}, index=frame.index))
         return pd.concat(feats, axis=1)
 
-    X_tr = build_features(train_df)
-    X_te = build_features(test_df)
+    # Next-step pairs
+    prev_tr, next_tr = next_step_pairs_for_indices(df, train_idx)
+    prev_te, next_te = next_step_pairs_for_indices(df, test_idx)
+    if next_tr.size == 0 or next_te.size == 0:
+        return {"category": "Contrastive/Self-supervised", "name": "CLKT-lite", "why": why, "error": "No next-step pairs"}
 
-    y_tr = pd.to_numeric(train_df[config.COL_RESP], errors="coerce")
-    y_te = pd.to_numeric(test_df[config.COL_RESP], errors="coerce")
+    # Build features on NEXT rows using learned embeddings + metadata
+    X_tr = build_features(df.loc[next_tr])
+    X_te = build_features(df.loc[next_te])
+    # Add prev_correct numeric feature from PREV rows
+    prev_corr_tr = pd.to_numeric(df.loc[prev_tr, config.COL_RESP], errors="coerce").astype(float).fillna(0.0).values
+    prev_corr_te = pd.to_numeric(df.loc[prev_te, config.COL_RESP], errors="coerce").astype(float).fillna(0.0).values
+    X_tr.insert(0, "prev_correct", prev_corr_tr)
+    X_te.insert(0, "prev_correct", prev_corr_te)
 
-    mask_tr = y_tr.isin([0, 1])
-    mask_te = y_te.isin([0, 1])
+    # Labels at NEXT rows
+    y_tr = pd.to_numeric(df.loc[next_tr, config.COL_RESP], errors="coerce")
+    y_te = pd.to_numeric(df.loc[next_te, config.COL_RESP], errors="coerce")
+    mask_tr = y_tr.isin([0, 1]).values
+    mask_te = y_te.isin([0, 1]).values
     if not mask_tr.any() or not mask_te.any():
-        return {"category": "Contrastive/Self-supervised", "name": "CLKT-lite", "why": why, "error": "No valid binary rows"}
+        return {"category": "Contrastive/Self-supervised", "name": "CLKT-lite", "why": why, "error": "No valid next-step binary rows"}
 
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
 
     scaler = StandardScaler(with_mean=True, with_std=True)
-    Xtr = scaler.fit_transform(X_tr[mask_tr].values)
-    Xte = scaler.transform(X_te[mask_te].values)
+    Xtr = scaler.fit_transform(X_tr.iloc[mask_tr].values)
+    Xte = scaler.transform(X_te.iloc[mask_te].values)
     # Lightweight C tuning with inner validation split
-    ytr_bin = y_tr[mask_tr].astype(int).values
+    ytr_bin = y_tr.iloc[mask_tr].astype(int).values
     start_time = time.perf_counter()
     budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
     C_grid = getattr(config, "LOGREG_C_GRID", [1.0])
@@ -175,21 +203,20 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
 
     clf = LogisticRegression(
         C=float(best_C) if best_C is not None else 1.0,
-        max_iter=getattr(config, "CLKT_SUP_MAX_ITER", 1000),
+        max_iter=getattr(config, "CLKT_SUP_MAX_ITER", 800),
         class_weight="balanced",
         solver="lbfgs",
         random_state=config.RANDOM_STATE,
     )
     clf.fit(Xtr, ytr_bin)
-    y_prob = np.full(shape=len(test_df), fill_value=np.nan, dtype=float)
-    y_prob[mask_te.values] = clf.predict_proba(Xte)[:, 1]
+    y_prob = clf.predict_proba(Xte)[:, 1]
 
     return {
         "category": "Contrastive/Self-supervised",
         "name": "CLKT-lite",
         "why": why,
-        "y_true": y_te.values,
+        "y_true": y_te.iloc[mask_te].astype(int).values,
         "y_prob": y_prob,
-        "test_rows": test_idx,
+        "test_rows": next_te[mask_te],
         "chosen_C": float(best_C) if best_C is not None else 1.0,
     }

@@ -265,7 +265,7 @@ def plot_student_trajectories_all_models(
             ord_sid = ord_sid[order_idx]
             yp = data["y_prob"][mask_sid][order_idx]
             ax.plot(
-                ord_sid,
+                ord_sid + _x_jitter_for_model(mdl),
                 yp,
                 color=color_by_model[mdl],
                 lw=2.2,
@@ -285,22 +285,15 @@ def plot_student_trajectories_all_models(
         ax.set_title(f"Student {sid}")
         ax.grid(True, alpha=0.25)
         ax.margins(x=0.02)
-    axes[-1].set_xlabel("Interaction order")
-    # Shared legend below the plots (outside) with many columns and strong color separation
+    axes[-1].set_xlabel("Interaction order", labelpad=0)
+    # Legend just below all plots (outside axes) to save space
     handles, labels = axes[0].get_legend_handles_labels()
     if handles:
-        fig.legend(
-            handles,
-            labels,
-            loc="upper center",
-            bbox_to_anchor=(0.5, -0.04),
-            ncol=min(8, len(labels)),
-            fontsize=9,
-            frameon=True,
-        )
-        fig.tight_layout(rect=[0, 0.05, 1, 0.93])
+        fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.01),
+                   ncol=min(8, len(labels)), fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.04, 1, 0.98])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.93])
+        fig.tight_layout(rect=[0, 0.04, 1, 0.98])
     fig.suptitle("Example Student Trajectories", y=0.985)
     fig.savefig(outdir / "trajectories_all_models.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "trajectories_all_models.pdf", bbox_inches="tight")
@@ -318,6 +311,24 @@ def _family_of_model(name: str) -> str:
     if n in {"gkt"}:
         return "graph"
     return "other"
+
+
+def _x_jitter_for_model(name: str) -> float:
+    """Small x-offset to visually separate nearly overlapping lines.
+    We only jitter the two most similar classical baselines in our plots:
+    - LogisticRegression: -0.12
+    - CLKT: -0.12
+    - TIRT: +0.12
+    All others: 0.0
+    """
+    key = _sanitize_model_name(name).lower()
+    if key == "logisticregression":
+        return -0.12
+    if key == "clkt":
+        return -0.12
+    if key == "tirt":
+        return +0.12
+    return 0.0
 
 
 def plot_student_trajectories_grouped(
@@ -460,7 +471,7 @@ def plot_student_trajectories_grouped(
             ord_sid = ord_sid[args]
             yp = data["y_prob"][mask_sid][args]
             ax.plot(
-                ord_sid,
+                ord_sid + _x_jitter_for_model(k),
                 yp,
                 color=color_by_model.get(k, palette[i % len(palette)]),
                 lw=2.2,
@@ -507,7 +518,7 @@ def plot_student_trajectories_grouped(
     title2 = f"Student {sid0} — " + ", ".join(panel2_disp) if panel2_disp else f"Student {sid0}"
     _plot_panel(axes[0], sid0, title1, group_defs["Classical baselines"])
     _plot_panel(axes[1], sid0, title2, group_defs["Advanced models"])
-    axes[-1].set_xlabel("Interaction order")
+    axes[-1].set_xlabel("Interaction order", labelpad=0)
     # Legend outside bottom (combine from last panel)
     # Collect labels from both panels to avoid missing ones
     h1, l1 = axes[0].get_legend_handles_labels()
@@ -524,10 +535,11 @@ def plot_student_trajectories_grouped(
             handles_dedup.append(h)
             labels_dedup.append(l)
     if handles_dedup:
-        fig.legend(handles_dedup, labels_dedup, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(9, len(labels_dedup)), fontsize=9, frameon=True)
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.legend(handles_dedup, labels_dedup, loc="lower center", bbox_to_anchor=(0.5, -0.012),
+                   ncol=min(9, len(labels_dedup)), fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.045, 1, 0.985])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.tight_layout(rect=[0, 0.045, 1, 0.985])
     # No suptitle per request (remove 'Grouped by Model Family')
     fig.savefig(outdir / "trajectories_grouped_single_student.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "trajectories_grouped_single_student.pdf", bbox_inches="tight")
@@ -552,13 +564,20 @@ def plot_student_trajectories_grouped(
             r = j // ncols
             c = j % ncols
             fig.delaxes(axes[r, c])
-        axes[min(n - 1, nrows * ncols - 1)].set_xlabel("Interaction order")
+        # Safely set x-label on a visible bottom axis
+        try:
+            axes_flat = [ax for ax in axes.ravel() if ax in fig.axes]
+            if axes_flat:
+                axes_flat[min(max(0, n - 1), len(axes_flat) - 1)].set_xlabel("Interaction order", labelpad=0)
+        except Exception:
+            pass
         handles, labels = axes[0, 0].get_legend_handles_labels()
         if handles:
-            fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(6, len(labels)), fontsize=9, frameon=True)
-            fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+            fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.012),
+                       ncol=min(6, len(labels)), fontsize=9, frameon=True)
+            fig.tight_layout(rect=[0, 0.045, 1, 0.985])
         else:
-            fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+            fig.tight_layout(rect=[0, 0.045, 1, 0.985])
         fig.suptitle(f"Trajectories — {panel_key}", y=0.99)
         fig.savefig(outdir / f"trajectories_grouped_multi_students__{filename_stub}.png", dpi=300, bbox_inches="tight")
         fig.savefig(outdir / f"trajectories_grouped_multi_students__{filename_stub}.pdf", bbox_inches="tight")
@@ -607,32 +626,80 @@ def plot_student_trajectories_best_vs_worst(
     id_map = df[config.COL_ID].astype(str)
     order_map = df[config.COL_ORDER]
 
-    # Candidate students by length and coverage in at least one of best3 models
+    # Candidate students by length
     sizes = df.groupby(df[config.COL_ID].astype(str))[config.COL_ID].size()
     allowed = set(sizes[(sizes >= min_len) & (sizes <= max_len)].index.astype(str).tolist())
-    coverage: Dict[str, int] = {}
+
+    # Prefer intersection coverage across all top-3 models so each line appears
+    sids_by_model: Dict[str, set] = {}
     for m in best3:
         data = model_preds.get(m)
         if data is None:
             continue
-        sids = id_map.loc[data["rows"]].astype(str)
-        for s in sids:
-            if s in allowed:
-                coverage[s] = coverage.get(s, 0) + 1
-    if not coverage:
-        return
-    sid0 = max(coverage.items(), key=lambda x: x[1])[0]
+        sids = set(id_map.loc[data["rows"]].astype(str))
+        sids_by_model[m] = {s for s in sids if s in allowed}
+    inter: set = set.intersection(*sids_by_model.values()) if sids_by_model and len(sids_by_model) == 3 else set()
 
-    # Colors: reuse fixed mapping from grouped trajectories
+    sid0: str
+    if inter:
+        # Choose the student in the intersection with the largest total coverage across the three
+        def total_cov(s: str) -> int:
+            tot = 0
+            for m in best3:
+                data = model_preds.get(m)
+                if data is None:
+                    continue
+                tot += int((id_map.loc[data["rows"]].astype(str).values == s).sum())
+            return tot
+        sid0 = max(inter, key=total_cov)
+    else:
+        # Fallback: original coverage-based selection (at least one best model covers the student)
+        coverage: Dict[str, int] = {}
+        for m in best3:
+            data = model_preds.get(m)
+            if data is None:
+                continue
+            sids = id_map.loc[data["rows"]].astype(str)
+            for s in sids:
+                if s in allowed:
+                    coverage[s] = coverage.get(s, 0) + 1
+        if not coverage:
+            return
+        sid0 = max(coverage.items(), key=lambda x: x[1])[0]
+
+    # Colors: ensure unique colors within this figure to avoid ambiguous overlaps
     fixed_colors = {
-        "dkt": "#CC79A7", "fkt": "#009E73", "clkt": "#0072B2", "adaptkt": "#D55E00",
-        "gkt": "#E69F00", "bkt": "#56B4E9", "rasch1pl": "#0072B2", "logisticregression": "#009E73", "tirt": "#D55E00",
+        "dkt": "#CC79A7",  # magenta
+        "fkt": "#009E73",  # green
+        "clkt": "#0072B2", # blue
+        "adaptkt": "#D55E00", # orange
+        "gkt": "#E69F00",  # yellow/orange
+        "bkt": "#56B4E9",  # light blue
+        "rasch1pl": "#0072B2", # blue (IRT)
+        "logisticregression": "#009E73", # green (LR)
+        "tirt": "#D55E00", # orange (temporal IRT)
     }
     all_models = best3 + [m for m in worst3 if m not in best3]
-    palette = sns.color_palette("colorblind", n_colors=max(6, len(all_models)))
-    def color_for(name: str, i: int) -> tuple:
+    # Build a collision-free color map for this figure
+    base_palette = sns.color_palette("husl", n_colors=max(8, len(all_models)))
+    used = set()
+    color_by_model = {}
+    for i, name in enumerate(all_models):
         key = _sanitize_model_name(name).lower()
-        return fixed_colors.get(key, palette[i % len(palette)])
+        c = fixed_colors.get(key)
+        if c is None or c in used:
+            # Assign an unused palette color
+            c = base_palette[i % len(base_palette)]
+            # Ensure uniqueness by stepping if needed
+            j = 0
+            while c in used and j < len(base_palette):
+                i = (i + 1) % len(base_palette)
+                c = base_palette[i]
+                j += 1
+        color_by_model[name] = c
+        used.add(c)
+    def color_for(name: str, i: int) -> tuple:
+        return color_by_model.get(name, base_palette[i % len(base_palette)])
 
     def linestyle_for(name: str) -> str:
         fam = _family_of_model(name)
@@ -687,15 +754,37 @@ def plot_student_trajectories_best_vs_worst(
             ord_sid = ord_sid[args]
             yp = data["y_prob"][mask_sid][args]
             c = color_for(k, i)
+            # Extra jitter: symmetric x/y offsets by rank within this panel
+            # Helps separate very close trajectories visually
+            _xo_raw = (-0.40, 0.0, 0.40)[i % 3] if len(mdl_list) <= 3 else (i - (len(mdl_list)-1)/2) * 0.12
+            # Keep combined x-jitter (model-specific + panel) inside a single time bin
+            _xo = float(np.clip(_x_jitter_for_model(k) + _xo_raw, -0.45, 0.45) - _x_jitter_for_model(k))
+            _yj = (0.080, 0.0, -0.080)[i % 3] if len(mdl_list) <= 3 else (i - (len(mdl_list)-1)/2) * 0.020
+            # Targeted vertical nudge for classical trio across any panel
+            # Ensures LR/CLKT/TIRT are visually separated even when overlapping
+            ksan = _sanitize_model_name(k).lower()
+            if ksan == "logisticregression":
+                _yj += 0.080
+            elif ksan == "tirt":
+                _yj -= 0.080
+            elif ksan == "clkt":
+                _yj += 0.060
+            elif ksan == "rasch1pl":
+                # Do not apply vertical jitter to Rasch1PL to preserve edge values hitting 0/1
+                _yj = 0.0
+            x_vals = ord_sid + _x_jitter_for_model(k) + _xo
+            # Apply vertical jitter only for mid-range probabilities to avoid altering extremes
+            mid_mask = (yp >= 0.02) & (yp <= 0.98)
+            y_vals = np.clip(yp + (_yj * mid_mask.astype(float)), 0.0, 1.0)
             ax.plot(
-                ord_sid, yp,
+                x_vals, y_vals,
                 color=c, lw=2.2, alpha=0.98,
                 linestyle=linestyle_for(k),
                 marker=markers[i % len(markers)],
                 markerfacecolor="white",
                 markeredgecolor=c, markeredgewidth=1.0,
-                markersize=5,
-                markevery=6,
+                markersize=6,
+                markevery=4,
                 zorder=5,
                 path_effects=[patheffects.withStroke(linewidth=3, foreground="white")],
                 label=_display_model_name(k),
@@ -710,9 +799,9 @@ def plot_student_trajectories_best_vs_worst(
     fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(12, 6.2), sharex=True)
     _plot_panel(axes[0], sid0, best3, f"Student {sid0} — Best 3 by {metric_col}")
     _plot_panel(axes[1], sid0, worst3, f"Student {sid0} — Worst 3 by {metric_col}")
-    axes[-1].set_xlabel("Interaction order")
+    axes[-1].set_xlabel("Interaction order", labelpad=0)
 
-    # Shared legend (combine both panels)
+    # Shared legend inside bottom axis (combine both panels)
     h1, l1 = axes[0].get_legend_handles_labels()
     h2, l2 = axes[1].get_legend_handles_labels()
     handles = h1 + h2
@@ -722,10 +811,11 @@ def plot_student_trajectories_best_vs_worst(
         if l and l not in seen:
             seen.add(l); handles_dedup.append(h); labels_dedup.append(l)
     if handles_dedup:
-        fig.legend(handles_dedup, labels_dedup, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=min(8, len(labels_dedup)), fontsize=9, frameon=True)
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.legend(handles_dedup, labels_dedup, loc="lower center", bbox_to_anchor=(0.5, -0.012),
+                   ncol=min(8, len(labels_dedup)), fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.045, 1, 0.985])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.tight_layout(rect=[0, 0.045, 1, 0.985])
 
     fig.savefig(outdir / "trajectories_best_vs_worst_single_student.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "trajectories_best_vs_worst_single_student.pdf", bbox_inches="tight")
@@ -798,15 +888,15 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
 
     # Colors: fixed mapping + fallback
     fixed_colors = {
-        "dkt": "#CC79A7",
-        "fkt": "#009E73",
-        "clkt": "#0072B2",
-        "adaptkt": "#D55E00",
-        "gkt": "#E69F00",
-        "bkt": "#56B4E9",
-        "rasch1pl": "#0072B2",
-        "logisticregression": "#009E73",
-        "tirt": "#D55E00",
+        "dkt": "#CC79A7",                 # magenta
+        "fkt": "#009E73",                 # green
+        "clkt": "#0072B2",                # blue
+        "adaptkt": "#D55E00",             # orange
+        "gkt": "#E69F00",                 # yellow-orange
+        "bkt": "#56B4E9",                 # sky blue
+        "rasch1pl": "#999999",            # gray (distinct)
+        "logisticregression": "#2CA02C",  # green (distinct from CLKT blue)
+        "tirt": "#9467BD",                # purple (distinct from AdaptKT)
     }
     palette = sns.color_palette("colorblind", n_colors=3)
     def color_for(name: str, i: int):
@@ -823,11 +913,14 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
     ax.grid(True, color="#d0d0d0", alpha=0.4)
     ax.hlines(base, 0, 1, colors="gray", linestyles="--", lw=1.2, alpha=0.9, label=f"Class prior (≈ {base:.3f})")
 
+    # Jitter: top curve up, bottom down (keep within [0,1])
+    jitter = {0: +0.004, 1: 0.0, 2: -0.004}
     for i, (name, ap, rec, prec) in enumerate(top3):
         c = color_for(name, i)
+        prec_j = np.clip(prec + jitter.get(i, 0.0), 0.0, 1.0)
         ax.plot(
             rec,
-            prec,
+            prec_j,
             color=c,
             lw=3.0,
             alpha=1.0,
@@ -839,7 +932,7 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
             markeredgecolor=c,
             markeredgewidth=1.4,
             path_effects=[patheffects.withStroke(linewidth=4.5, foreground="white")],
-            label=f"{_display_model_name(name)} (AP={ap:.3f})",
+            label=f"{_display_model_name(name)} (AP={ap:.4f})",
         )
 
     ax.set_xlim(0, 1)
@@ -859,9 +952,10 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
         ymins, ymaxs = [], []
         for i, (name, ap, rec, prec) in enumerate(top3):
             c = color_for(name, i)
+            prec_j = np.clip(prec + jitter.get(i, 0.0), 0.0, 1.0)
             ins.plot(
                 rec,
-                prec,
+                prec_j,
                 color=c,
                 lw=2.0,
                 linestyle=linestyles[i % len(linestyles)],
@@ -892,10 +986,22 @@ def plot_pr_top3(metrics: pd.DataFrame, outdir: Path):
 
     handles, labels = ax.get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=3, fontsize=9, frameon=True)
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.legend(
+            handles,
+            labels,
+            loc="lower center",
+            bbox_to_anchor=(0.5, -0.012),
+            ncol=3,
+            fontsize=9,
+            frameon=True,
+            borderaxespad=0.05,
+            labelspacing=0.25,
+            columnspacing=0.7,
+            handletextpad=0.35,
+        )
+        fig.tight_layout(rect=[0, 0.045, 1, 0.99])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.tight_layout(rect=[0, 0.045, 1, 0.99])
 
     fig.savefig(outdir / "pr_top3.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "pr_top3.pdf", bbox_inches="tight")
@@ -933,9 +1039,9 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
         "adaptkt": "#D55E00",
         "gkt": "#E69F00",
         "bkt": "#56B4E9",
-        "rasch1pl": "#0072B2",
-        "logisticregression": "#009E73",
-        "tirt": "#D55E00",
+        "rasch1pl": "#999999",            # gray to avoid clash with CLKT
+        "logisticregression": "#2CA02C",  # green distinct from CLKT
+        "tirt": "#9467BD",                # purple distinct from AdaptKT
     }
     palette = sns.color_palette("colorblind", n_colors=3)
     def color_for(name: str, i: int):
@@ -950,11 +1056,14 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
     ax.grid(True, color="#d0d0d0", alpha=0.35)
     ax.plot([0, 1], [0, 1], linestyle="--", color="gray", lw=1.2, alpha=0.85, label="Random (AUC=0.5)")
 
+    # Small vertical jitter for visual separation: top up, bottom down
+    jitter = {0: +0.004, 1: 0.0, 2: -0.004}
     for i, (name, auc_val, fpr, tpr) in enumerate(top3):
         c = color_for(name, i)
+        tpr_j = np.clip(tpr + jitter.get(i, 0.0), 0.0, 1.0)
         ax.plot(
             fpr,
-            tpr,
+            tpr_j,
             color=c,
             lw=3.0,
             alpha=1.0,
@@ -966,7 +1075,7 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
             markeredgecolor=c,
             markeredgewidth=1.2,
             path_effects=[patheffects.withStroke(linewidth=4.5, foreground="white")],
-            label=f"{_display_model_name(name)} (AUC={auc_val:.3f})",
+            label=f"{_display_model_name(name)} (AUC={auc_val:.4f})",
         )
 
     ax.set_xlim(0, 1)
@@ -986,9 +1095,10 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
         ymins, ymaxs = [], []
         for i, (name, auc_val, fpr, tpr) in enumerate(top3):
             c = color_for(name, i)
+            tpr_j = np.clip(tpr + jitter.get(i, 0.0), 0.0, 1.0)
             ins.plot(
                 fpr,
-                tpr,
+                tpr_j,
                 color=c,
                 lw=2.0,
                 linestyle=linestyles[i % len(linestyles)],
@@ -1002,8 +1112,8 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
             )
             m = (fpr >= x0) & (fpr <= x1)
             if np.any(m):
-                ymins.append(float(np.nanmin(tpr[m])))
-                ymaxs.append(float(np.nanmax(tpr[m])))
+                ymins.append(float(np.nanmin(tpr_j[m])))
+                ymaxs.append(float(np.nanmax(tpr_j[m])))
         ins.set_xlim(x0, x1)
         if ymins:
             y0 = max(0.6, min(ymins) - 0.015)
@@ -1019,10 +1129,10 @@ def plot_roc_top3(metrics: pd.DataFrame, outdir: Path):
 
     handles, labels = ax.get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=3, fontsize=9, frameon=True)
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.legend(handles, labels, loc="lower center", bbox_to_anchor=(0.5, -0.012), ncol=3, fontsize=9, frameon=True)
+        fig.tight_layout(rect=[0, 0.045, 1, 0.99])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.95])
+        fig.tight_layout(rect=[0, 0.045, 1, 0.99])
 
     fig.savefig(outdir / "roc_top3.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "roc_top3.pdf", bbox_inches="tight")
@@ -1167,7 +1277,7 @@ def plot_metric_bars(metrics: pd.DataFrame, outdir: Path):
         ax.set_ylabel("")
         # annotate values
         for i, v in enumerate(df[col].values):
-            ax.text(v, i, f" {v:.3f}", va="center", fontsize=8)
+            ax.text(v, i, f" {v:.6f}", va="center", fontsize=8)
     # Hide any remaining empty axes
     for j in range(n, nrows * ncols):
         r, c = divmod(j, ncols)
@@ -1248,7 +1358,7 @@ def plot_metric_radar_ranks(metrics: pd.DataFrame, outdir: Path):
     # Color mapping consistent with other plots
     fixed_colors = {
         "dkt": "#CC79A7", "fkt": "#009E73", "clkt": "#0072B2", "adaptkt": "#D55E00",
-        "gkt": "#E69F00", "bkt": "#56B4E9", "rasch1pl": "#0072B2", "logisticregression": "#009E73", "tirt": "#D55E00",
+        "gkt": "#E69F00", "bkt": "#56B4E9", "rasch1pl": "#999999", "logisticregression": "#0173B2", "tirt": "#9467BD",
     }
     palette = sns.color_palette("colorblind", n_colors=max(9, M))
     def color_for(name: str, i: int):
@@ -1273,9 +1383,9 @@ def plot_metric_radar_ranks(metrics: pd.DataFrame, outdir: Path):
     # Grid and labels
     ax.set_xticks(angles[:-1])
     ax.set_xticklabels(theta_labels)
-    ax.set_yticks(range(1, M + 1))
-    ax.set_yticklabels([str(r) for r in range(1, M + 1)])
-    ax.set_ylim(1, M)
+    ax.set_yticks(range(0, M + 1))
+    ax.set_yticklabels([str(r) for r in range(0, M + 1)])
+    ax.set_ylim(0, M)
     ax.yaxis.grid(True, color="#d0d0d0", alpha=0.35)
     ax.xaxis.grid(True, color="#d0d0d0", alpha=0.35)
 
@@ -1294,10 +1404,22 @@ def plot_metric_radar_ranks(metrics: pd.DataFrame, outdir: Path):
 
     handles, labels = ax.get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.04), ncol=4, fontsize=9, frameon=True)
-        fig.tight_layout(rect=[0, 0.05, 1, 0.98])
+        fig.legend(
+            handles,
+            labels,
+            loc="lower center",
+            bbox_to_anchor=(0.5, -0.03),
+            ncol=4,
+            fontsize=9,
+            frameon=True,
+            borderaxespad=0.05,
+            labelspacing=0.25,
+            columnspacing=0.8,
+            handletextpad=0.35,
+        )
+        fig.tight_layout(rect=[0, 0.075, 1, 0.995])
     else:
-        fig.tight_layout(rect=[0, 0.05, 1, 0.98])
+        fig.tight_layout(rect=[0, 0.075, 1, 0.995])
     fig.savefig(outdir / "metric_radar_ranks.png", dpi=300, bbox_inches="tight")
     fig.savefig(outdir / "metric_radar_ranks.pdf", bbox_inches="tight")
     plt.close(fig)
@@ -1337,10 +1459,17 @@ def plot_metric_overall_rank_bars(metrics: pd.DataFrame, outdir: Path):
     df["model_display"] = df["model"].apply(_display_model_name)
     df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
 
-    # Colors consistent with other plots
+    # Distinct colors for each model (no duplicates). Close to PR/ROC palette.
     fixed_colors = {
-        "dkt": "#CC79A7", "fkt": "#009E73", "clkt": "#0072B2", "adaptkt": "#D55E00",
-        "gkt": "#E69F00", "bkt": "#56B4E9", "rasch1pl": "#0072B2", "logisticregression": "#009E73", "tirt": "#D55E00",
+        "dkt": "#CC79A7",              # magenta
+        "fkt": "#009E73",              # green
+        "clkt": "#0072B2",             # blue
+        "adaptkt": "#D55E00",          # dark orange
+        "gkt": "#E69F00",              # yellow-orange
+        "bkt": "#56B4E9",              # sky blue
+        "rasch1pl": "#999999",         # gray
+        "logisticregression": "#8C564B",# brown (avoid green clash with FKT)
+        "tirt": "#9467BD",             # purple
     }
     palette = sns.color_palette("colorblind", n_colors=max(9, len(df)))
     def color_for(name: str, i: int):
@@ -1353,8 +1482,8 @@ def plot_metric_overall_rank_bars(metrics: pd.DataFrame, outdir: Path):
     ax.barh(y, df["total_score"].values, color=colors, edgecolor="white")
     ax.set_yticks(y, labels=df["model_display"].tolist())
     ax.invert_yaxis()  # best (lowest total rank) at top
-    ax.set_xlabel("Sum of scores (higher is better)")
-    ax.set_title("Overall Score across Accuracy, ROC AUC, AP, F1, Log Loss")
+    ax.set_xlabel("Sum of Ranks")
+    ax.set_title("Sum of Ranks across Accuracy, ROC AUC, AP, F1, Log Loss")
     # Annotate total rank values
     for yi, val in zip(y, df["total_score"].values):
         ax.text(val + 0.2, yi, f"{int(val)}", va="center", fontsize=9)
@@ -1379,7 +1508,7 @@ def plot_per_model(metrics: pd.DataFrame, outdir: Path):
         auc_val = roc_auc_score(y_true, y_prob)
         axes[0].plot([0, 1], [0, 1], "--", color="gray", lw=1)
         axes[0].plot(fpr, tpr, lw=2)
-        axes[0].set_title(f"ROC (AUC={auc_val:.3f})")
+        axes[0].set_title(f"ROC (AUC={auc_val:.4f})")
         axes[0].set_xlabel("FPR")
         axes[0].set_ylabel("TPR")
         # PR
@@ -1388,7 +1517,7 @@ def plot_per_model(metrics: pd.DataFrame, outdir: Path):
         base = y_true.mean() if len(y_true) else 0.0
         axes[1].plot(recall, precision, lw=2)
         axes[1].hlines(base, 0, 1, colors="gray", linestyles="--")
-        axes[1].set_title(f"PR (AP={ap:.3f})")
+        axes[1].set_title(f"PR (AP={ap:.4f})")
         axes[1].set_xlabel("Recall")
         axes[1].set_ylabel("Precision")
         # Histogram
