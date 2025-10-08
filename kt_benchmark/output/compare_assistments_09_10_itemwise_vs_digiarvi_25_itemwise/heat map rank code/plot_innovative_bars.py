@@ -628,20 +628,22 @@ def _draw_single_heatmap_ranked(df: pd.DataFrame, outdir: Path) -> None:
         # fallback: keep as one line
         return ds
     disp.columns = [f"{m}\n{_split_dataset_two_lines(d)}" for m, d in disp.columns]
+    n_models = len(order)
     annot_df = pd.DataFrame({
         f"{m}\n{d}": [
-            ("" if pd.isna(tbl.loc[mdl, (m, d)]) else f"{tbl.loc[mdl, (m, d)]:.3f}\n#{int(rank_tbl.loc[mdl, (m, d)])}")
+            (
+                ""
+                if pd.isna(tbl.loc[mdl, (m, d)])
+                else f"{tbl.loc[mdl, (m, d)]:.4f}\nRank {int(n_models - rank_tbl.loc[mdl, (m, d)] + 1)}"
+            )
             for mdl in rank_tbl.index
         ]
         for (m, d) in rank_tbl.columns
     }, index=rank_tbl.index)
 
-    n_models = len(order)
-    # Gentle medal-based palette: gold, silver, bronze for top-3; soft Blues gradient for others
-    gold = "#D4AF37"; silver = "#C0C0C0"; bronze = "#CD7F32"
-    rest = sns.color_palette("Blues", n_colors=max(1, n_models - 3))
-    colors_by_rank = [gold, silver, bronze] + list(rest)
-    cmap = ListedColormap(colors_by_rank[:n_models])
+    # Red→Blue gradient, rank 1 = red (best), worst = blue
+    colors_by_rank = sns.color_palette("RdBu", n_colors=n_models)
+    cmap = ListedColormap(colors_by_rank)
     norm = mpl.colors.BoundaryNorm(boundaries=np.arange(1, n_models + 2), ncolors=n_models)
 
     # Wide landscape for readability; increase height scaling so bigger annotations fit
@@ -709,11 +711,9 @@ def _draw_ranked_sorted_per_column(df: pd.DataFrame, outdir: Path) -> None:
     models = sorted(df["Model"].unique(), key=lambda m: _sanitize_model_name(m).lower())
     n_models = len(models)
 
-    # color mapping shared across subplots
-    gold = "#D4AF37"; silver = "#C0C0C0"; bronze = "#CD7F32"
-    rest = sns.color_palette("Blues", n_colors=max(1, n_models - 3))
-    colors_by_rank = [gold, silver, bronze] + list(rest)
-    cmap = ListedColormap(colors_by_rank[:n_models])
+    # Red→Blue gradient for rank (1=best red → worst blue)
+    colors_by_rank = sns.color_palette("RdBu", n_colors=n_models)
+    cmap = ListedColormap(colors_by_rank)
     norm = mpl.colors.BoundaryNorm(boundaries=np.arange(1, n_models + 2), ncolors=n_models)
 
     # columns to render
@@ -743,16 +743,17 @@ def _draw_ranked_sorted_per_column(df: pd.DataFrame, outdir: Path) -> None:
         def atext(m):
             v = col.loc[m]
             rk = int(ranks.loc[m]) if pd.notna(ranks.loc[m]) else n_models
+            disp_rk = int(n_models - rk + 1)
             if pd.isna(v):
-                return f"#{rk}"
+                return f"Rank {disp_rk}"
             if metric == "Rank":
                 try:
                     vtxt = f"{int(round(float(v)))}"
                 except Exception:
                     vtxt = str(v)
             else:
-                vtxt = f"{float(v):.3f}"
-            return f"#{rk}\n{vtxt}"
+                vtxt = f"{float(v):.4f}"
+            return f"Rank {disp_rk}\n{vtxt}"
         annot = pd.DataFrame({disp.columns[0]: [atext(m) for m in order]}, index=order)
 
         sns.heatmap(
