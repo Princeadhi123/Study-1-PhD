@@ -137,6 +137,23 @@ METRIC_RANGES: Dict[str, Optional[tuple]] = {
 # Data loading
 # ------------------------------------------------------------
 
+def _normalize_metric_name(name: str) -> str:
+    s = str(name).strip()
+    key = s.lower().replace("_", " ").replace("-", " ")
+    # Canonical names
+    if key in {"roc auc", "auroc", "auc"}:
+        return "ROC-AUC"
+    if key in {"average precision", "avg precision", "ap"}:
+        return "Average Precision"
+    if key in {"f1", "f1 score"}:
+        return "F1"
+    if key in {"log loss", "logloss", "log loss (lower is better)"}:
+        return "Log Loss"
+    if key in {"accuracy"}:
+        return "Accuracy"
+    return s
+
+
 def load_long_df(input_csv: Optional[str]) -> pd.DataFrame:
     # Priority: explicit path -> packaged default CSV -> embedded DEFAULT_DATA
     if input_csv:
@@ -159,7 +176,7 @@ def load_long_df(input_csv: Optional[str]) -> pd.DataFrame:
         raise ValueError(f"Input is missing required columns: {sorted(missing)}")
     df = df.copy()
     df["Model"] = df["Model"].astype(str)
-    df["Metric"] = df["Metric"].astype(str)
+    df["Metric"] = df["Metric"].astype(str).apply(_normalize_metric_name)
     df["Dataset"] = df["Dataset"].astype(str)
     df["Value"] = pd.to_numeric(df["Value"], errors="coerce")
     df = df.dropna(subset=["Value"])  # only keep numeric
