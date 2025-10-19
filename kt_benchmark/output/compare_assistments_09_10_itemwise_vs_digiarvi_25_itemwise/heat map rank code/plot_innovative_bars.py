@@ -690,6 +690,7 @@ def _draw_single_heatmap_ranked(df: pd.DataFrame, outdir: Path) -> None:
             ticks = np.arange(1, len(order) + 1)
             cbar.set_ticks(ticks)
             cbar.set_ticklabels(list(reversed(ticks)))
+            cbar.ax.invert_yaxis()
     except Exception:
         pass
     # Horizontal x labels (three-line max), bigger and bold
@@ -808,6 +809,7 @@ def _draw_ranked_sorted_per_column(df: pd.DataFrame, outdir: Path) -> None:
     cb.set_label("Rank (1=best)")
     cb.set_ticks(np.arange(1, n_models + 1))
     cb.set_ticklabels(list(reversed(range(1, n_models + 1))))
+    cb.ax.invert_yaxis()
 
     fig.tight_layout(rect=[0.02, 0.02, 0.9, 0.98])
     outdir.mkdir(parents=True, exist_ok=True)
