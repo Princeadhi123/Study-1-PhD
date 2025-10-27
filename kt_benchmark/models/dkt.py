@@ -140,8 +140,22 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
                 r_pad[i, :L] = torch.tensor(rows, dtype=torch.long)
         return it_pad, y_pad, r_pad, torch.tensor(lengths, dtype=torch.long)
 
-    train_loader = DataLoader(SeqDataset(train_seqs), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=True, collate_fn=collate)
-    test_loader = DataLoader(SeqDataset(test_seqs), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=False, collate_fn=collate)
+    train_loader = DataLoader(
+        SeqDataset(train_seqs),
+        batch_size=getattr(config, "DKT_BATCH", 32),
+        shuffle=True,
+        collate_fn=collate,
+        num_workers=int(getattr(config, "DATALOADER_NUM_WORKERS", 0)),
+        pin_memory=bool(getattr(config, "PIN_MEMORY", False)),
+    )
+    test_loader = DataLoader(
+        SeqDataset(test_seqs),
+        batch_size=getattr(config, "DKT_BATCH", 32),
+        shuffle=False,
+        collate_fn=collate,
+        num_workers=int(getattr(config, "DATALOADER_NUM_WORKERS", 0)),
+        pin_memory=bool(getattr(config, "PIN_MEMORY", False)),
+    )
 
     class DKT(nn.Module):
         def __init__(self, vocab: int, emb: int = 32, hid: int = 64):
@@ -161,11 +175,15 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             return logits
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if bool(getattr(config, "CUDNN_BENCHMARK", False)):
+        torch.backends.cudnn.benchmark = True
     model = DKT(vocab=vocab_size, emb=getattr(config, "DKT_EMB_DIM", 32), hid=getattr(config, "DKT_HID_DIM", 64)).to(device)
     crit = nn.BCEWithLogitsLoss(reduction="none")
     opt = torch.optim.Adam(
         model.parameters(), lr=float(getattr(config, "DKT_LR", 1e-3)), weight_decay=float(getattr(config, "DKT_WEIGHT_DECAY", 0.0))
     )
+    use_amp = bool(getattr(config, "USE_AMP", False)) and (device.type == "cuda")
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     # Prepare inner validation split over training students (for early stopping)
     best_state = None
@@ -191,9 +209,30 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         train_seqs_in = train_seqs
         val_seqs = []
 
-    train_loader = DataLoader(SeqDataset(train_seqs_in), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=True, collate_fn=collate)
-    val_loader = DataLoader(SeqDataset(val_seqs), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=False, collate_fn=collate) if val_seqs else None
-    test_loader = DataLoader(SeqDataset(test_seqs), batch_size=getattr(config, "DKT_BATCH", 32), shuffle=False, collate_fn=collate)
+    train_loader = DataLoader(
+        SeqDataset(train_seqs_in),
+        batch_size=getattr(config, "DKT_BATCH", 32),
+        shuffle=True,
+        collate_fn=collate,
+        num_workers=int(getattr(config, "DATALOADER_NUM_WORKERS", 0)),
+        pin_memory=bool(getattr(config, "PIN_MEMORY", False)) and (device.type == "cuda"),
+    )
+    val_loader = DataLoader(
+        SeqDataset(val_seqs),
+        batch_size=getattr(config, "DKT_BATCH", 32),
+        shuffle=False,
+        collate_fn=collate,
+        num_workers=int(getattr(config, "DATALOADER_NUM_WORKERS", 0)),
+        pin_memory=bool(getattr(config, "PIN_MEMORY", False)) and (device.type == "cuda"),
+    ) if val_seqs else None
+    test_loader = DataLoader(
+        SeqDataset(test_seqs),
+        batch_size=getattr(config, "DKT_BATCH", 32),
+        shuffle=False,
+        collate_fn=collate,
+        num_workers=int(getattr(config, "DATALOADER_NUM_WORKERS", 0)),
+        pin_memory=bool(getattr(config, "PIN_MEMORY", False)) and (device.type == "cuda"),
+    )
 
     # Train (respect time budget) with early stopping on validation loss if available
     model.train()
@@ -206,22 +245,22 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             it_pad = it_pad.to(device)
             y_pad = y_pad.to(device)
             lengths = lengths.to(device)
-            logits = model(it_pad, lengths)
-            # Next-item loss: compare logits[:, :-1] to y[:, 1:] where labels exist
-            y_float = (y_pad == 1).float()
-            mask = (y_pad != -1).float()
-            if logits.size(1) > 1:
-                logits_n = logits[:, :-1]
-                y_n = y_float[:, 1:]
-                m_n = mask[:, 1:]
-                loss_raw = crit(logits_n, y_n)
-                loss = (loss_raw * m_n).sum() / (m_n.sum() + 1e-6)
-            else:
-                # No next-step available for length-1 sequences in a batch
-                loss = (logits * 0).sum()
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                logits = model(it_pad, lengths)
+                y_float = (y_pad == 1).float()
+                mask = (y_pad != -1).float()
+                if logits.size(1) > 1:
+                    logits_n = logits[:, :-1]
+                    y_n = y_float[:, 1:]
+                    m_n = mask[:, 1:]
+                    loss_raw = crit(logits_n, y_n)
+                    loss = (loss_raw * m_n).sum() / (m_n.sum() + 1e-6)
+                else:
+                    loss = (logits * 0).sum()
+            opt.zero_grad(set_to_none=True)
+            scaler.scale(loss).backward()
+            scaler.step(opt)
+            scaler.update()
         # Validation
         if val_loader is not None:
             model.eval()
@@ -231,16 +270,17 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
                     it_pad = it_pad.to(device)
                     y_pad = y_pad.to(device)
                     lengths = lengths.to(device)
-                    logits = model(it_pad, lengths)
-                    y_float = (y_pad == 1).float()
-                    mask = (y_pad != -1).float()
-                    if logits.size(1) > 1:
-                        logits_n = logits[:, :-1]
-                        y_n = y_float[:, 1:]
-                        m_n = mask[:, 1:]
-                        l_raw = crit(logits_n, y_n)
-                        l = (l_raw * m_n).sum() / (m_n.sum() + 1e-6)
-                        val_losses.append(l.item())
+                    with torch.cuda.amp.autocast(enabled=use_amp):
+                        logits = model(it_pad, lengths)
+                        y_float = (y_pad == 1).float()
+                        mask = (y_pad != -1).float()
+                        if logits.size(1) > 1:
+                            logits_n = logits[:, :-1]
+                            y_n = y_float[:, 1:]
+                            m_n = mask[:, 1:]
+                            l_raw = crit(logits_n, y_n)
+                            l = (l_raw * m_n).sum() / (m_n.sum() + 1e-6)
+                            val_losses.append(l.item())
                 val_loss = float(np.mean(val_losses)) if val_losses else float("inf")
             # Early stopping check
             if val_loss < best_val - 1e-4:
@@ -269,9 +309,9 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             y_pad = y_pad.to(device)
             r_pad = r_pad.to(device)
             lengths = lengths.to(device)
-            logits = model(it_pad, lengths)
-            probs = torch.sigmoid(logits)
-            # Next-item eval: use positions 1..L-1 for y_true and 0..L-2 for probabilities
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                logits = model(it_pad, lengths)
+                probs = torch.sigmoid(logits)
             if logits.size(1) > 1:
                 y_slice = y_pad[:, 1:]
                 p_slice = probs[:, :-1]

@@ -10,6 +10,11 @@ from ..utils import next_step_row_indices
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, accuracy_score
 import time
+try:
+    from joblib import Parallel, delayed  # type: ignore
+except Exception:
+    Parallel = None
+    delayed = None
 
 
 def _build_group_graph(train_df: pd.DataFrame) -> pd.DataFrame:
@@ -94,10 +99,8 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         else:
             inner_tr, inner_va = train_df, pd.DataFrame(columns=train_df.columns)
 
-        # Evaluate each alpha on validation
-        for a in alpha_grid:
-            if budget is not None and (time.perf_counter() - start_time) > float(budget):
-                break
+        # Evaluate alphas (parallel if joblib available)
+        def eval_alpha(a: float) -> tuple[float, float]:
             sm_dict, global_mean_loc, _ = smooth_from_frame(inner_tr, float(a))
             if not inner_va.empty:
                 g_series = inner_va[config.COL_GROUP].astype(str)
@@ -113,16 +116,22 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
                 else:
                     score = -np.inf
             else:
-                # No validation available, use training likelihood proxy: mean abs error vs grp_mean
                 g_series = inner_tr[config.COL_GROUP].astype(str)
                 y_true_tr = pd.to_numeric(inner_tr[config.COL_RESP], errors="coerce")
                 mask = y_true_tr.isin([0, 1]).values
                 y_true_v = y_true_tr[mask].astype(int).values
                 y_prob_v = np.array([sm_dict.get(g, global_mean_loc) for g in g_series[mask]], dtype=float)
                 score = -float(np.mean(np.abs(y_true_v - y_prob_v))) if y_true_v.size else -np.inf
+            return float(a), float(score)
+
+        if Parallel is not None and len(alpha_grid) > 1:
+            results = Parallel(n_jobs=int(getattr(config, "GKT_N_JOBS", -1)))(delayed(eval_alpha)(float(a)) for a in alpha_grid)
+        else:
+            results = [eval_alpha(float(a)) for a in alpha_grid]
+        for a_val, score in results:
             if score > best_score:
                 best_score = score
-                best_alpha = float(a)
+                best_alpha = float(a_val)
     except Exception:
         best_alpha = float(getattr(config, "GKT_SMOOTH_ALPHA", 0.7))
 

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 # Paths
-BASE_DIR = Path(r"c:/Users/pdaadh/Desktop/Study 2")
+BASE_DIR = Path(__file__).resolve().parents[1]
 INPUT_CSV = BASE_DIR / "DigiArvi_25_itemwise.csv"
 OUTPUT_DIR = BASE_DIR / "kt_benchmark" / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -25,13 +25,13 @@ MIN_STUDENT_EVENTS = 5  # drop students with fewer events
 USE_TORCH = True
 
 # Training durations (set higher for longer training)
-EPOCHS_DKT = 20          # DKT epochs
-EPOCHS_MTL = 20          # FKT-lite epochs
+EPOCHS_DKT = 50          # DKT epochs (HPC)
+EPOCHS_MTL = 50          # FKT-lite epochs (HPC)
 EPOCHS_CLKT = 10         # If used by any CLKT fine-tuning variants
 
 # Fairness: per-model wall-clock budget (seconds). Models with iterative loops
 # (e.g., scikit-learn solvers) may ignore it but typically finish under budget.
-TRAIN_TIME_BUDGET_S = 120
+TRAIN_TIME_BUDGET_S = 1800  # 30 minutes for HPC
 
 # Rasch (1PL)
 RASCH_MAX_ITER = 100
@@ -44,7 +44,9 @@ BKT_GRID_G  = [0.05, 0.10, 0.15, 0.20, 0.25]
 BKT_GRID_S  = [0.05, 0.10, 0.15, 0.20, 0.25]
 # Control whether BKT fits per-skill (group) or a single global model across all skills.
 # Setting this to False will generally reduce BKT performance.
-BKT_PER_GROUP = False
+BKT_PER_GROUP = True
+# Parallel workers for per-group BKT (joblib). -1 uses all CPUs, 0 forces serial.
+BKT_N_JOBS = -1
 # Graph smoothing
 GKT_SMOOTH_ALPHA = 0.7
 
@@ -53,6 +55,7 @@ LOGREG_MAX_ITER = 500   # plain LogisticRegression
 TIRT_MAX_ITER   = 500   # TIRT-lite's logistic head
 CLKT_SUP_MAX_ITER = 5000 # supervised LR after contrastive pretraining
 ADAPT_MAX_ITER  = 5000   # AdaptKT-lite classifier
+LOGREG_N_JOBS = -1       # use all CPUs where applicable
 
 # Linear model feature toggles and solver tolerances
 # If Assistments runs are slow due to very high KC/skill cardinality, you can
@@ -67,7 +70,7 @@ DKT_HID_DIM = 128
 DKT_LR = 1e-3
 MTL_HID_DIM = 128
 MTL_LR = 1e-3
-MTL_BATCH = 256
+MTL_BATCH = 512
 
 # CLKT contrastive pretraining
 CLKT_PRE_STEPS = 2000
@@ -91,7 +94,7 @@ TIRT_C_GRID   = [0.01, 0.1, 1.0, 10.0]
 GKT_ALPHA_GRID = [0.5, 0.6, 0.7, 0.8, 0.9]
 
 # DKT training controls
-DKT_BATCH = 64
+DKT_BATCH = 256
 DKT_DROPOUT = 0.2
 DKT_WEIGHT_DECAY = 1e-4
 DKT_PATIENCE = 3
@@ -113,3 +116,9 @@ TRAJECTORY_MODELS = [
     "DKT (minimal)",
     "FKT-lite",
 ]
+
+# HPC / Performance toggles
+DATALOADER_NUM_WORKERS = 4
+PIN_MEMORY = True
+USE_AMP = True
+CUDNN_BENCHMARK = True

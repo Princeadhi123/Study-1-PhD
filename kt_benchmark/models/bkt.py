@@ -8,6 +8,11 @@ import numpy as np
 import pandas as pd
 
 from .. import config
+try:
+    from joblib import Parallel, delayed  # type: ignore
+except Exception:  # joblib optional; fall back to serial
+    Parallel = None
+    delayed = None
 
 
 @dataclass
@@ -123,11 +128,14 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     budget = getattr(config, "TRAIN_TIME_BUDGET_S", None)
 
     if use_per_group and (config.COL_GROUP in train_df.columns):
-        for g, sub in train_df.groupby(config.COL_GROUP, dropna=False):
-            if budget is not None and (time.perf_counter() - start_time) > float(budget):
-                break
-            p = _fit_group_params(sub)
-            group_params[str(g)] = p
+        groups = list(train_df.groupby(config.COL_GROUP, dropna=False))
+        g_labels = [str(g) for g, _ in groups]
+        n_jobs = int(getattr(config, "BKT_N_JOBS", -1))
+        if Parallel is not None and n_jobs != 0:
+            params_list = Parallel(n_jobs=n_jobs)(delayed(_fit_group_params)(sub) for _, sub in groups)
+        else:
+            params_list = [_fit_group_params(sub) for _, sub in groups]
+        group_params = {g: p for g, p in zip(g_labels, params_list)}
     else:
         # Fit a single global BKT
         # Uses entire train_df sequences by student

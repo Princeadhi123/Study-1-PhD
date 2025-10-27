@@ -10,6 +10,11 @@ import pandas as pd
 
 from .. import config
 from ..utils import next_step_row_indices
+try:
+    from joblib import Parallel, delayed  # type: ignore
+except Exception:
+    Parallel = None
+    delayed = None
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
@@ -93,11 +98,11 @@ class Rasch1PL:
         for it in range(self.max_iter):
             if budget is not None and (time.perf_counter() - start_time) > float(budget):
                 break
-            # Update theta per user via Newton steps
-            for i in range(n_users):
+            # Update theta per user via Newton steps (parallelizable per user)
+            def _update_theta(i: int) -> float:
                 idx = idx_by_user[i]
                 if idx.size == 0:
-                    continue
+                    return theta[i]
                 yi = y[idx]
                 bj = beta[v[idx]]
                 ti = theta[i]
@@ -108,13 +113,19 @@ class Rasch1PL:
                     step = g / h
                     step = float(np.clip(step, -1.0, 1.0))
                     ti -= step
-                theta[i] = ti
+                return ti
 
-            # Update beta per item via Newton steps
-            for j in range(n_items):
+            n_jobs = int(getattr(config, "RASCH_N_JOBS", -1))
+            if Parallel is not None and n_jobs != 0:
+                theta = np.array(Parallel(n_jobs=n_jobs)(delayed(_update_theta)(i) for i in range(n_users)), dtype=float)
+            else:
+                theta = np.array([_update_theta(i) for i in range(n_users)], dtype=float)
+
+            # Update beta per item via Newton steps (parallelizable per item)
+            def _update_beta(j: int) -> float:
                 idx = idx_by_item[j]
                 if idx.size == 0:
-                    continue
+                    return beta[j]
                 yj = y[idx]
                 ti = theta[u[idx]]
                 bj = beta[j]
@@ -125,7 +136,12 @@ class Rasch1PL:
                     step = g / h
                     step = float(np.clip(step, -1.0, 1.0))
                     bj -= step
-                beta[j] = bj
+                return bj
+
+            if Parallel is not None and n_jobs != 0:
+                beta = np.array(Parallel(n_jobs=n_jobs)(delayed(_update_beta)(j) for j in range(n_items)), dtype=float)
+            else:
+                beta = np.array([_update_beta(j) for j in range(n_items)], dtype=float)
 
             # Center beta to mean 0, shift theta accordingly
             b_mean = beta.mean()

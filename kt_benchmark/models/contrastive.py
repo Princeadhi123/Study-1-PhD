@@ -57,10 +57,14 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     # Contrastive model: learn item embeddings with triplet loss
     dim = int(getattr(config, "CLKT_PRE_DIM", 32))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if bool(getattr(config, "CUDNN_BENCHMARK", False)):
+        torch.backends.cudnn.benchmark = True
     emb = nn.Embedding(n_items, dim).to(device)
     loss_fn = nn.TripletMarginLoss(margin=1.0, p=2)
 
     opt = torch.optim.Adam(emb.parameters(), lr=float(getattr(config, "CLKT_PRE_LR", 1.1e-2)))
+    use_amp = bool(getattr(config, "USE_AMP", False)) and (device.type == "cuda")
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     def sample_batch(batch_size: int = 256):
         # sample positives, and random negatives different from anchor
@@ -94,11 +98,13 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         if budget is not None and (time.perf_counter() - start_time) > float(budget):
             break
         a, p, n = sample_batch(batch)
-        va, vp, vn = emb(a), emb(p), emb(n)
-        loss = loss_fn(va, vp, vn)
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            va, vp, vn = emb(a), emb(p), emb(n)
+            loss = loss_fn(va, vp, vn)
+        opt.zero_grad(set_to_none=True)
+        scaler.scale(loss).backward()
+        scaler.step(opt)
+        scaler.update()
         # Early stopping bookkeeping
         L = float(loss.detach().cpu().item())
         if L + min_delta < best_loss:

@@ -57,6 +57,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
                 solver="saga",
                 penalty="l2",
                 random_state=config.RANDOM_STATE,
+                n_jobs=getattr(config, "LOGREG_N_JOBS", -1),
             )
             clf_tmp.fit(X_tr_in, y_tr_in)
             prob_va = clf_tmp.predict_proba(X_va_in)[:, 1]
@@ -78,6 +79,7 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         solver="saga",
         penalty="l2",
         random_state=config.RANDOM_STATE,
+        n_jobs=getattr(config, "LOGREG_N_JOBS", -1),
     )
     clf.fit(X_tr, y_tr)
     y_prob = clf.predict_proba(X_te)[:, 1]

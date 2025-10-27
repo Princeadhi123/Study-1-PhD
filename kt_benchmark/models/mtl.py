@@ -67,6 +67,8 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
 
     # Torch dataset
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if bool(getattr(config, "CUDNN_BENCHMARK", False)):
+        torch.backends.cudnn.benchmark = True
     Xt = torch.tensor(X_tr, dtype=torch.float32, device=device)
     yt_corr = torch.tensor(y_tr_corr, dtype=torch.float32, device=device)
     yt_rt = torch.tensor(np.nan_to_num(y_tr_rt, nan=0.0), dtype=torch.float32, device=device)
@@ -94,6 +96,8 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
     opt = torch.optim.Adam(
         model.parameters(), lr=float(getattr(config, "MTL_LR", 1e-3)), weight_decay=float(getattr(config, "MTL_WEIGHT_DECAY", 0.0))
     )
+    use_amp = bool(getattr(config, "USE_AMP", False)) and (device.type == "cuda")
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     # Train (respect time budget) with early stopping via inner validation split
     model.train()
@@ -122,13 +126,15 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
             yb = yt_corr[idx_slice]
             rb = yt_rt[idx_slice]
             mb = mt_rt[idx_slice]
-            logit, rt_pred = model(xb)
-            loss_corr = bce(logit, yb)
-            loss_rt = (mse(rt_pred, rb) * mb).sum() / (mb.sum() + 1e-6)
-            loss = loss_corr + 0.2 * loss_rt  # small weight on aux
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                logit, rt_pred = model(xb)
+                loss_corr = bce(logit, yb)
+                loss_rt = (mse(rt_pred, rb) * mb).sum() / (mb.sum() + 1e-6)
+                loss = loss_corr + 0.2 * loss_rt
+            opt.zero_grad(set_to_none=True)
+            scaler.scale(loss).backward()
+            scaler.step(opt)
+            scaler.update()
         # Validation step
         if va_in.size > 0:
             model.eval()
@@ -137,10 +143,11 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
                 yb = yt_corr[va_in]
                 rb = yt_rt[va_in]
                 mb = mt_rt[va_in]
-                logit, rt_pred = model(xb)
-                loss_corr = bce(logit, yb)
-                loss_rt = (mse(rt_pred, rb) * mb).sum() / (mb.sum() + 1e-6)
-                val_loss = float((loss_corr + 0.2 * loss_rt).item())
+                with torch.cuda.amp.autocast(enabled=use_amp):
+                    logit, rt_pred = model(xb)
+                    loss_corr = bce(logit, yb)
+                    loss_rt = (mse(rt_pred, rb) * mb).sum() / (mb.sum() + 1e-6)
+                    val_loss = float((loss_corr + 0.2 * loss_rt).item())
             if val_loss < best_val - 1e-4:
                 best_val = val_loss
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
@@ -159,9 +166,10 @@ def run(df: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> Dict[s
         model.load_state_dict(best_state)
     model.eval()
     with torch.no_grad():
-        logit, rt_pred = model(Xte_t)
-        y_prob = torch.sigmoid(logit).cpu().numpy()
-        rt_pred_np = rt_pred.cpu().numpy()
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            logit, rt_pred = model(Xte_t)
+    y_prob = torch.sigmoid(logit).cpu().numpy()
+    rt_pred_np = rt_pred.cpu().numpy()
 
     # Aux metrics where RT available
     if m_te_rt.any():
