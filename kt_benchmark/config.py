@@ -1,8 +1,9 @@
 from pathlib import Path
 
 # Paths
-BASE_DIR = Path(r"c:/Users/pdaadh/Desktop/Study 2")
-INPUT_CSV = BASE_DIR / "DigiArvi_25_itemwise.csv"
+BASE_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = BASE_DIR / "data"
+INPUT_CSV = DATA_DIR / "DigiArvi_25_itemwise.csv"
 OUTPUT_DIR = BASE_DIR / "kt_benchmark" / "output"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

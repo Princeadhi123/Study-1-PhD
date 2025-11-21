@@ -368,10 +368,11 @@ def main(dataset_paths: List[Path] | None = None, reuse: bool = False):
     # Resolve datasets
     if not dataset_paths:
         # Fallback to two most relevant CSVs if present
+        data_dir = getattr(config, "DATA_DIR", config.BASE_DIR)
         candidates = [
-            config.BASE_DIR / 'assistments_09_10_itemwise.csv',
-            config.BASE_DIR / 'DigiArvi_25_itemwise.csv',
-            config.BASE_DIR / 'EQTd_DAi_25_itemwise_with_10_quartile.csv',
+            data_dir / 'assistments_09_10_itemwise.csv',
+            data_dir / 'DigiArvi_25_itemwise.csv',
+            data_dir / 'EQTd_DAi_25_itemwise_with_10_quartile.csv',
         ]
         present = [p for p in candidates if p.exists()]
         if len(present) < 2:
